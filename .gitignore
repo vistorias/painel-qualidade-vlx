@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.env
+.env.*
+
+# Streamlit (secrets só no Cloud)
+.streamlit/secrets.toml
+
+# Credenciais / chaves privadas (NÃO versionar)
+gcp-key.json
+spatial-dryad-*.json
+*.secret.json
+*.credentials.json
+
+# (Opcional, mais seguro) bloquear todos os .json por padrão
+*.json
+
+# SO / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
