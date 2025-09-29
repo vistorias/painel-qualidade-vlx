@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# Painel de Qualidade — LOG (multi-meses)
+# Painel de Qualidade — Velox (multi-meses)
 # ============================================================
 
 import os, io, json, re, unicodedata, calendar
@@ -372,7 +372,6 @@ dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame
 
 
 # ------------------ FILTROS PRINCIPAIS ------------------
-# >>>> AQUI muda para VELOX
 if "EMPRESA" in dfQ.columns:
     dfQ = dfQ[dfQ["EMPRESA"] == "VELOX"].copy()
 
@@ -457,6 +456,10 @@ else:
 total_vist_brutas = int(len(viewP)) if not viewP.empty else 0
 taxa_geral = (total_erros / total_vist_brutas * 100) if total_vist_brutas else np.nan
 taxa_geral_str = "—" if np.isnan(taxa_geral) else f"{taxa_geral:.1f}%".replace(".", ",")
+
+# << adição: taxa_gg_bruta (% de GG sobre vistorias brutas do período)
+taxa_gg_bruta = (total_gg / total_vist_brutas * 100) if total_vist_brutas else np.nan
+taxa_gg_bruta_str = "—" if np.isnan(taxa_gg_bruta) else f"{taxa_gg_bruta:.1f}%".replace(".", ",")
 
 # ---- Comparativo com mesmo intervalo do mês anterior (para os cards) ----
 periodo_atual_ini, periodo_atual_fim = start_d, end_d
@@ -552,6 +555,11 @@ cards_html = """
     <h2>{taxa_geral}</h2>
   </div>
   <div class='card'>
+    <h4>% GG sobre a produção</h4>
+    <h2>{taxa_gg_bruta}</h2>
+    <span class='sub neu'>base: vistorias brutas</span>
+  </div>
+  <div class='card'>
     <h4>Projeção do mês — Erros</h4>
     <h2>{proj_total}</h2>
     <span class='sub neu'>MTD: {mtd_total}</span>
@@ -571,6 +579,7 @@ cards_html = """
     vist_avaliados=f"{vist_avaliados:,}".replace(",", "."),
     media_por_vist=f"{media_por_vist:.1f}".replace(".", ","),
     taxa_geral=taxa_geral_str,
+    taxa_gg_bruta=taxa_gg_bruta_str,  # << adição
     proj_total=f"{proj_total:,}".replace(",", "."),
     proj_gg=f"{proj_gg:,}".replace(",", "."),
     mtd_total=f"{erros_mtd_total:,}".replace(",", "."),
@@ -578,6 +587,12 @@ cards_html = """
 )
 st.markdown(cards_html, unsafe_allow_html=True)
 
+# ------------------ BASE BRUTA x LÍQUIDA (global p/ heatmap e %Erro) ------------------
+denom_mode = st.radio(
+    "Base para %Erro (usada no heatmap e na tabela de % por vistoriador)",
+    ["Bruta (recomendado)", "Líquida"],
+    horizontal=True, index=0, key="denom_mode_global"
+)
 
 # ------------------ HOJE x ONTEM (ATÉ AGORA) ------------------
 st.markdown('<div class="section">⏱️ Hoje vs Ontem (até agora)</div>', unsafe_allow_html=True)
@@ -745,26 +760,6 @@ if "GRAVIDADE" in viewQ.columns:
             st.altair_chart(bar_with_labels(by_grav, "GRAVIDADE", "QTD", x_title="GRAVIDADE", height=340),
                             use_container_width=True)
 
-c3, c4 = st.columns(2)
-
-if "ANALISTA" in viewQ.columns:
-    with c3:
-        st.markdown('<div class="section">🧑‍💻 Erros por analista</div>', unsafe_allow_html=True)
-        by_ana = (viewQ.groupby("ANALISTA", dropna=False)["ERRO"]
-                  .size().reset_index(name="QTD").sort_values("QTD", ascending=False))
-        if len(by_ana):
-            st.altair_chart(bar_with_labels(by_ana, "ANALISTA", "QTD", x_title="ANALISTA"),
-                            use_container_width=True)
-
-with c4:
-    st.markdown('<div class="section">🏷️ Top 5 erros</div>', unsafe_allow_html=True)
-    top5 = (viewQ.groupby("ERRO", dropna=False)["ERRO"]
-            .size().reset_index(name="QTD").sort_values("QTD", ascending=False).head(5))
-    if len(top5):
-        st.altair_chart(bar_with_labels(top5, "ERRO", "QTD", x_title="ERRO"),
-                        use_container_width=True)
-
-
 # ------------------ VISUALIZAÇÕES EXTRAS ------------------
 ex1, ex2 = st.columns(2)
 
@@ -856,40 +851,94 @@ with ex1:
 
 with ex2:
     st.markdown('<div class="section">🗺️ Heatmap Cidade × Gravidade</div>', unsafe_allow_html=True)
-    if "UNIDADE" in viewQ.columns and "GRAVIDADE" in viewQ.columns:
-        hm = (viewQ.groupby(["UNIDADE","GRAVIDADE"])["ERRO"].size().reset_index(name="QTD"))
+    if ("UNIDADE" in viewQ.columns) and ("GRAVIDADE" in viewQ.columns):
+        # Erros por UNIDADE x GRAVIDADE
+        erros_city = (
+            viewQ.groupby(["UNIDADE", "GRAVIDADE"])["ERRO"]
+            .size()
+            .reset_index(name="QTD")
+        )
+
+        # Denominador: vistorias por cidade no mesmo recorte (Bruta/Líquida conforme rádio)
+        if not viewP.empty and "UNIDADE" in viewP.columns:
+            prod_city = (
+                viewP.groupby("UNIDADE", dropna=False)
+                .agg(vist=("IS_REV", "size"), rev=("IS_REV", "sum"))
+                .reset_index()
+            )
+            prod_city["liq"] = prod_city["vist"] - prod_city["rev"]
+        else:
+            prod_city = pd.DataFrame({
+                "UNIDADE": erros_city["UNIDADE"].unique(),
+                "vist": 0, "rev": 0
+            })
+            prod_city["liq"] = 0
+
+        denom_col = "liq" if denom_mode.startswith("Líquida") else "vist"
+
+        hm = erros_city.merge(
+            prod_city[["UNIDADE", denom_col]].rename(columns={denom_col: "DEN"}),
+            on="UNIDADE",
+            how="left",
+        )
+        hm["%_VIST"] = np.where(hm["DEN"] > 0, (hm["QTD"] / hm["DEN"]) * 100, np.nan)
+        # versão textual para tooltip com % e vírgula
+        hm["%_VIST_TXT"] = hm["%_VIST"].map(lambda x: "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ","))
+
+        # Heatmap (cor = QTD) + tooltip com % sobre vistorias
         rects = alt.Chart(hm).mark_rect().encode(
             x=alt.X("GRAVIDADE:N", axis=alt.Axis(labelAngle=0, title="GRAVIDADE")),
             y=alt.Y("UNIDADE:N", sort='-x', title="UNIDADE"),
-            color=alt.Color("QTD:Q", scale=alt.Scale(scheme="blues")),
-            tooltip=["UNIDADE","GRAVIDADE","QTD"]
+            color=alt.Color("QTD:Q", scale=alt.Scale(scheme="blues"), title="QTD"),
+            tooltip=[
+                alt.Tooltip("UNIDADE:N", title="UNIDADE"),
+                alt.Tooltip("GRAVIDADE:N", title="GRAVIDADE"),
+                alt.Tooltip("QTD:Q", format=".0f", title="Erros"),
+                alt.Tooltip("DEN:Q", format=".0f",
+                            title=f"Vistorias ({'líq.' if denom_col=='liq' else 'brutas'})"),
+                alt.Tooltip("%_VIST_TXT:N", title="% sobre vistorias"),
+            ],
         )
-        texts = alt.Chart(hm).mark_text(baseline="middle").encode(
-            x="GRAVIDADE:N", y="UNIDADE:N", text=alt.Text("QTD:Q", format=".0f"),
-            color=alt.condition("datum.QTD > 0", alt.value("#111"), alt.value("#111"))
+
+        labels = alt.Chart(hm).mark_text(baseline="middle").encode(
+            x="GRAVIDADE:N",
+            y="UNIDADE:N",
+            text=alt.Text("QTD:Q", format=".0f"),
+            color=alt.value("#111"),
         )
-        st.altair_chart((rects + texts).properties(height=340), use_container_width=True)
 
-ex3, ex4 = st.columns(2)
+        st.altair_chart((rects + labels).properties(height=340), use_container_width=True)
+    else:
+        st.info("Base sem colunas UNIDADE/GRAVIDADE.")
 
-with ex3:
+# ------------------ TABELAS EXTRAS ------------------
+col_esq, col_dir = st.columns(2)
+
+with col_esq:
     st.markdown('<div class="section">♻️ Reincidência por vistoriador (≥3)</div>', unsafe_allow_html=True)
     rec = (viewQ.groupby(["VISTORIADOR","ERRO"])["ERRO"]
            .size().reset_index(name="QTD").sort_values("QTD", ascending=False))
     rec = rec[rec["QTD"] >= 3]
     st.dataframe(rec, use_container_width=True, hide_index=True)
 
-with ex4:
+with col_dir:
     st.markdown('<div class="section">⚖️ Calibração por analista (% GG)</div>', unsafe_allow_html=True)
     if "ANALISTA" in viewQ.columns and "GRAVIDADE" in viewQ.columns:
-        ana = (viewQ.assign(_gg=viewQ["GRAVIDADE"].isin(grav_gg).astype(int))
-               .groupby("ANALISTA")["_gg"].mean().reset_index(name="%GG")
-               .sort_values("%GG", ascending=False))
+        ana = (
+            viewQ.assign(_gg=viewQ["GRAVIDADE"].isin(grav_gg).astype(int))
+                 .groupby("ANALISTA")["_gg"]
+                 .mean()
+                 .reset_index(name="%GG")
+        )
+        # ordenar do maior %GG para o menor
+        ana = ana.sort_values("%GG", ascending=False)
         ana["%GG"] = (ana["%GG"] * 100).round(1)
+
         st.altair_chart(
             alt.Chart(ana).mark_bar().encode(
                 x=alt.X("ANALISTA:N", axis=alt.Axis(labelAngle=0, labelLimit=180)),
-                y=alt.Y("%GG:Q"), tooltip=["ANALISTA", alt.Tooltip("%GG:Q", format=".1f")]
+                y=alt.Y("%GG:Q"),
+                tooltip=["ANALISTA", alt.Tooltip("%GG:Q", format=".1f")]
             ).properties(height=340),
             use_container_width=True,
         )
@@ -907,7 +956,8 @@ if not dow_df.empty:
 # ------------------ % ERRO (casamento com Produção) ------------------
 st.markdown("---")
 st.markdown('<div class="section">📐 % de erro por vistoriador</div>', unsafe_allow_html=True)
-denom_mode = st.radio("Base para %Erro", ["Bruta (recomendado)", "Líquida"], horizontal=True, index=0)
+# reutiliza a escolha feita no rádio acima
+denom_mode = st.session_state.get("denom_mode_global", "Bruta (recomendado)")
 
 if not viewP.empty:
     prod = (viewP.groupby("VISTORIADOR", dropna=False)
@@ -1055,6 +1105,164 @@ st.dataframe(
     use_container_width=True, hide_index=True,
 )
 
+# ------------------ COMPARATIVO SEMANAL (automático: 2 a 4 semanas) ------------------
+st.markdown("---")
+st.markdown("### 🔵 Comparativo semanal por vistoriador")
+
+def _clip_month(di, dfim):
+    di = max(di, month_start)
+    dfim = min(dfim, month_end)
+    return di, dfim
+
+def _slice_q(df, di, dfim):
+    d = pd.to_datetime(df["DATA"], errors="coerce").dt.date
+    return df[d.between(di, dfim)]
+
+def _slice_p(df, di, dfim):
+    d = pd.to_datetime(df["__DATA__"], errors="coerce").dt.date
+    return df[d.between(di, dfim)]
+
+def _pct_week(qdf, pdf):
+    """ERROS por vist. + %ERRO (bruta ou líquida) para uma janela semanal."""
+    grav_gg = {"GRAVE", "GRAVISSIMO", "GRAVÍSSIMO"}
+
+    if qdf.empty:
+        qual = pd.DataFrame(columns=["VISTORIADOR","ERROS","ERROS_GG"])
+    else:
+        qual = (qdf.groupby("VISTORIADOR", dropna=False)
+                .agg(ERROS=("ERRO","size"),
+                     ERROS_GG=("GRAVIDADE", lambda s: s.isin(grav_gg).sum()))
+                .reset_index())
+
+    if pdf.empty:
+        prod = pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
+    else:
+        prod = (pdf.groupby("VISTORIADOR", dropna=False)
+                .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
+                .reset_index())
+        prod["liq"] = prod["vist"] - prod["rev"]
+
+    den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
+    out = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
+
+    for c in ["vist","rev","liq","ERROS","ERROS_GG"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
+
+    den = out[den_col].replace({0: np.nan}).astype(float)
+    out["%ERRO"]    = (out["ERROS"]    / den * 100).round(1)
+    out["%ERRO_GG"] = (out["ERROS_GG"] / den * 100).round(1)
+    out["DEN"] = out[den_col].fillna(0).astype(int)
+
+    return out[["VISTORIADOR","ERROS","%ERRO","ERROS_GG","%ERRO_GG","DEN"]]
+
+def _make_week_block(di, dfim, prefix, meta_list):
+    q = _slice_q(viewQ, di, dfim)
+    p = _slice_p(viewP, di, dfim)
+    meta_list.append((prefix, di, dfim))
+    return _pct_week(q, p).add_prefix(prefix)
+
+sem_fins = []
+cur_end = min(end_d, month_end)
+for _ in range(4):
+    di = (pd.Timestamp(cur_end) - pd.Timedelta(days=6)).date()
+    di, dfim = _clip_month(di, cur_end)
+    if di > dfim or dfim < month_start:
+        break
+    sem_fins.append((di, dfim))
+    cur_end = (pd.Timestamp(di) - pd.Timedelta(days=1)).date()
+    if cur_end < month_start:
+        break
+
+if len(sem_fins) < 2:
+    st.info("Sem semanas suficientes no mês para montar o comparativo.")
+else:
+    sem_fins = list(reversed(sem_fins))
+    k = len(sem_fins)
+
+    meta = []
+    blocks = []
+    for i, (di, dfim) in enumerate(sem_fins, start=1):
+        blocks.append(_make_week_block(di, dfim, f"S{i}_", meta))
+
+    from functools import reduce
+    tab = reduce(
+        lambda L, R: L.merge(R, left_on=f"{L.columns[0]}", right_on=f"{R.columns[0]}", how="outer"),
+        blocks
+    )
+
+    def _pick_row(row):
+        for i in range(1, k+1):
+            v = row.get(f"S{i}_VISTORIADOR", "")
+            if isinstance(v, str) and v.strip():
+                return v
+        return ""
+    tab["VISTORIADOR"] = tab.apply(_pick_row, axis=1)
+
+    for c in tab.columns:
+        if c.endswith("ERROS") or c.endswith("ERROS_GG") or c.endswith("DEN"):
+            tab[c] = pd.to_numeric(tab[c], errors="coerce").fillna(0).astype(int)
+
+    def _status_pp(delta):
+        if pd.isna(delta): return "—"
+        if delta < 0:     return f"Melhorou (↓ {abs(delta):.1f} pp)"
+        if delta > 0:     return f"Piorou (↑ {delta:.1f} pp)"
+        return "Sem alteração (↔)"
+
+    for i in range(1, k):
+        dcol = f"Δ_%ERRO_S{i}_S{i+1}"
+        tab[dcol] = (tab[f"S{i+1}_%ERRO"] - tab[f"S{i}_%ERRO"]).round(1)
+        tab[f"Status (S{i}→S{i+1})"] = tab[dcol].map(_status_pp)
+
+    def _status3(p1, p2, p3):
+        if any(pd.isna([p1, p2, p3])): return "—"
+        d12 = p2 - p1; d23 = p3 - p2
+        if d12 < 0 and d23 < 0: return "Continua melhorando (↓↓)"
+        if d12 > 0 and d23 > 0: return "Continua piorando (↑↑)"
+        if d12 < 0 and d23 > 0: return "Melhorou e depois piorou (↓↑)"
+        if d12 > 0 and d23 < 0: return "Piorou e depois melhorou (↑↓)"
+        return "Sem alteração (↔↔)"
+
+    if k >= 3:
+        tab["Status (3-semanas)"] = [
+            _status3(r.get(f"S{k-2}_%ERRO", np.nan), r.get(f"S{k-1}_%ERRO", np.nan), r.get(f"S{k}_%ERRO", np.nan))
+            for _, r in tab.iterrows()
+        ]
+
+    def _fmt_pct(x): return "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ",")
+    def _fmt_pp(x):  return "—" if pd.isna(x) else f"{x:.1f} pp".replace(".", ",")
+
+    cols = ["VISTORIADOR"]
+    for i in range(1, k+1):
+        cols += [f"S{i}_ERROS", f"S{i}_%ERRO", f"S{i}_ERROS_GG", f"S{i}_%ERRO_GG"]
+
+    for i in range(1, k):
+        cols += [f"Δ_%ERRO_S{i}_S{i+1}", f"Status (S{i}→S{i+1})"]
+
+    if k >= 3:
+        cols += ["Status (3-semanas)"]
+
+    out = tab[cols].copy()
+
+    for c in out.columns:
+        if c.endswith("%ERRO") or c.endswith("%ERRO_GG"):
+            out[c] = out[c].map(_fmt_pct)
+        elif c.startswith("Δ_%ERRO_"):
+            out[c] = out[c].map(_fmt_pp)
+
+    order_key = tab[f"S{k}_%ERRO"].fillna(-1).values
+    out = out.iloc[np.argsort(-order_key)]
+
+    legend_parts = []
+    for i, (prefix, di, dfim) in enumerate(meta, start=1):
+        label = f"**Semana {i}**: {di:%d/%m}–{dfim:%d/%m}"
+        if i == k:
+            label = label.replace(f"**Semana {i}**", f"**Semana {i} (atual)**")
+        legend_parts.append(label)
+    st.caption("  ·  ".join(legend_parts))
+
+    st.dataframe(out.reset_index(drop=True), use_container_width=True, hide_index=True)
+
 # ------------------ RANKINGS ------------------
 st.markdown("---")
 st.markdown('<div class="section">🏁 Top 5 melhores × piores (por % de erro)</div>', unsafe_allow_html=True)
@@ -1097,3 +1305,4 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
