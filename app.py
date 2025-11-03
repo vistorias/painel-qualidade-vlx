@@ -1014,8 +1014,8 @@ st.markdown('<div class="section">📐 % de erro por vistoriador</div>', unsafe_
 denom_mode = st.session_state.get("denom_mode_global", "Bruta (recomendado)")
 
 # Metas e tolerância
-META_ERRO     = 3.5
-META_ERRO_GG  = 1.5
+META_ERRO     = 5.0
+META_ERRO_GG  = 2.0
 TOL_AMARELO   = 0.5
 
 def _farol(pct, meta, tol=TOL_AMARELO):
@@ -1497,6 +1497,7 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
 
 
 
