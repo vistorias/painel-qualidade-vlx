@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# Painel de Qualidade — Velox (multi-meses)
+# Painel de Qualidade — VELOX (multi-meses)
 # ============================================================
 
 import os, io, json, re, unicodedata, calendar
@@ -23,8 +23,8 @@ from googleapiclient.http import MediaIoBaseDownload
 
 
 # ------------------ CONFIG BÁSICA ------------------
-st.set_page_config(page_title="Painel de Qualidade — Velox", layout="wide")
-st.title("🎯 Painel de Qualidade — Velox")
+st.set_page_config(page_title="Painel de Qualidade — VELOX", layout="wide")
+st.title("🎯 Painel de Qualidade — VELOX")
 
 st.markdown(
     """
@@ -234,9 +234,11 @@ def read_quality_month(month_id: str) -> Tuple[pd.DataFrame, str]:
         elif cu in {"OBSERVAÇÃO","OBSERVACAO","OBS"}: rename_map[c] = "OBS"
         elif cu == "ANALISTA": rename_map[c] = "ANALISTA"
         elif cu in {"EMPRESA","MARCA"}: rename_map[c] = "EMPRESA"
+        elif cu in {"TEMPO DE CASA","TEMPO_DE_CASA","TEMPO CASA","TEMPOCASA"}:
+            rename_map[c] = "TEMPO_CASA"
     dq = dq.rename(columns=rename_map)
 
-    for need in ["DATA","PLACA","VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA"]:
+    for need in ["DATA","PLACA","VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","TEMPO_CASA"]:
         if need not in dq.columns:
             dq[need] = ""
 
@@ -247,7 +249,7 @@ def read_quality_month(month_id: str) -> Tuple[pd.DataFrame, str]:
     else:
         dq["DATA_TS"] = pd.NaT
 
-    for c in ["VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","PLACA"]:
+    for c in ["VISTORIADOR","UNIDADE","ERRO","GRAVIDADE","ANALISTA","EMPRESA","PLACA","TEMPO_CASA"]:
         dq[c] = dq[c].astype(str).map(_upper)
 
     dq = dq[(dq["VISTORIADOR"] != "") & (dq["ERRO"] != "")]
@@ -301,12 +303,10 @@ def read_prod_month(month_sheet_id: str, ym: Optional[str] = None) -> Tuple[pd.D
         if rows:
             dm = pd.DataFrame(rows)
             cols = list(dm.columns)
-            c_vist  = _find_col(cols, "VISTORIADOR")
-            c_unid  = _find_col(cols, "UNIDADE")
-            c_meta  = _find_col(cols, "META_MENSAL", "META MENSAL", "META")
-            c_du    = _find_col(cols, "DIAS ÚTEIS", "DIAS UTEIS", "DIAS_UTEIS")
-            c_tempo = _find_col(cols, "TEMPO CASA", "TEMPO_CASA", "TEMPO DE CASA", "TEMPODECASA")
-
+            c_vist = _find_col(cols, "VISTORIADOR")
+            c_unid = _find_col(cols, "UNIDADE")
+            c_meta = _find_col(cols, "META_MENSAL", "META MENSAL", "META")
+            c_du   = _find_col(cols, "DIAS ÚTEIS", "DIAS UTEIS", "DIAS_UTEIS")
             out = pd.DataFrame()
             out["VISTORIADOR"] = dm[c_vist].astype(str).map(_upper) if c_vist else ""
             out["UNIDADE"] = dm[c_unid].astype(str).map(_upper) if c_unid else ""
@@ -314,7 +314,6 @@ def read_prod_month(month_sheet_id: str, ym: Optional[str] = None) -> Tuple[pd.D
             out["DIAS_UTEIS"]  = pd.to_numeric(dm[c_du], errors="coerce").fillna(np.nan)
             out["DIAS_UTEIS"]  = out["DIAS_UTEIS"].astype(float).round().astype("Int64")
             out["YM"] = ym or ""
-            out["TEMPO_CASA"] = dm[c_tempo].astype(str).map(_upper) if c_tempo else ""
             metas = out
     except Exception:
         metas = pd.DataFrame()
@@ -379,10 +378,11 @@ if not dq_all:
 
 dfQ = pd.concat(dq_all, ignore_index=True)
 dfP = pd.concat(dp_all, ignore_index=True) if dp_all else pd.DataFrame(columns=["VISTORIADOR","__DATA__","IS_REV","UNIDADE"])
-dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame(columns=["VISTORIADOR","UNIDADE","META_MENSAL","DIAS_UTEIS","YM","TEMPO_CASA"])
+dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame(columns=["VISTORIADOR","UNIDADE","META_MENSAL","DIAS_UTEIS","YM"])
 
-# variável global para filtro de tempo de casa
-allowed_vists = None
+# Normaliza TEMPO_CASA (NOVATO / VETERANO) — IGUAL TOKYO
+if "TEMPO_CASA" in dfQ.columns:
+    dfQ["TEMPO_CASA"] = dfQ["TEMPO_CASA"].astype(str).map(_upper)
 
 
 # ------------------ FILTROS PRINCIPAIS ------------------
@@ -406,9 +406,11 @@ s_mes_dates = pd.to_datetime(dfQ_mes["DATA"], errors="coerce").dt.date
 min_d, max_d = min(s_mes_dates.dropna()), max(s_mes_dates.dropna())
 col1, col2 = st.columns([1.2, 2.8])
 with col1:
-    drange = st.date_input("Período (dentro do mês)",
-                           value=(min_d, max_d), min_value=min_d, max_value=max_d,
-                           format="DD/MM/YYYY")
+    drange = st.date_input(
+        "Período (dentro do mês)",
+        value=(min_d, max_d), min_value=min_d, max_value=max_d,
+        format="DD/MM/YYYY"
+    )
 
 start_d, end_d = (drange if isinstance(drange, tuple) and len(drange)==2 else (min_d, max_d))
 mask_dias = s_mes_dates.map(lambda d: isinstance(d, date) and start_d <= d <= end_d)
@@ -424,11 +426,32 @@ with col2:
         f_unids = st.multiselect("Unidades (opcional)", unids, default=unids)
     with c22:
         f_vists = st.multiselect("Vistoriadores (opcional)", vist_opts)
+    # Filtro de tempo de casa no cabeçalho — IGUAL TOKYO
+    perfil_sel = st.radio(
+        "Tempo de casa",
+        ["Todos", "Somente Novatos", "Somente Veteranos"],
+        horizontal=True,
+        key="perfil_tempo_casa_velox"
+    )
+
+# Ajusta label para NOVATO / VETERANO interno
+if perfil_sel == "Somente Novatos":
+    alvo_perfil = "NOVATO"
+elif perfil_sel == "Somente Veteranos":
+    alvo_perfil = "VETERANO"
+else:
+    alvo_perfil = None
 
 if f_unids and "UNIDADE" in viewQ.columns:
     viewQ = viewQ[viewQ["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if f_vists:
     viewQ = viewQ[viewQ["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+
+# Aplica filtro NOVATO / VETERANO na base de qualidade
+set_vists_perfil = None
+if "TEMPO_CASA" in viewQ.columns and alvo_perfil is not None:
+    viewQ = viewQ[viewQ["TEMPO_CASA"] == alvo_perfil]
+    set_vists_perfil = set(viewQ["VISTORIADOR"].unique())
 
 if viewQ.empty:
     st.info("Sem registros de Qualidade no período/filtros."); st.stop()
@@ -447,50 +470,14 @@ if not dfP.empty:
         viewP = viewP[viewP["UNIDADE"].isin([_upper(u) for u in f_unids])]
     if f_vists and "VISTORIADOR" in viewP.columns:
         viewP = viewP[viewP["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+
+    # Aplica filtro de perfil também na produção
+    if set_vists_perfil is not None and "VISTORIADOR" in viewP.columns:
+        viewP = viewP[viewP["VISTORIADOR"].isin(set_vists_perfil)]
 else:
     viewP = dfP.copy()
-
-# -------- Filtro TEMPO DE CASA (Novato / Veterano) --------
-has_tempo = False
-novatos, veteranos = set(), set()
-
-if ("TEMPO_CASA" in dfMetas.columns) and (not dfMetas.empty):
-    metas_cur_tempo = dfMetas[dfMetas["YM"].fillna("").astype(str) == ym_sel].copy()
-    if not metas_cur_tempo.empty:
-        has_tempo = True
-        metas_cur_tempo["VISTORIADOR"] = metas_cur_tempo["VISTORIADOR"].astype(str).map(_upper)
-        metas_cur_tempo["TEMPO_CASA"] = metas_cur_tempo["TEMPO_CASA"].astype(str).map(_upper)
-        novatos = set(metas_cur_tempo.loc[metas_cur_tempo["TEMPO_CASA"] == "NOVATO", "VISTORIADOR"])
-        veteranos = set(metas_cur_tempo.loc[metas_cur_tempo["TEMPO_CASA"] == "VETERANO", "VISTORIADOR"])
-
-if has_tempo:
-    tempo_choice = st.radio(
-        "Tempo de casa",
-        ["Todos", "Somente Novatos", "Somente Veteranos"],
-        index=0,
-        horizontal=True,
-    )
-    if tempo_choice == "Somente Novatos":
-        allowed_vists = novatos
-    elif tempo_choice == "Somente Veteranos":
-        allowed_vists = veteranos
-    else:
-        allowed_vists = None
-else:
-    tempo_choice = "Todos"
-    allowed_vists = None
-
-if allowed_vists is not None and len(allowed_vists):
-    if "VISTORIADOR" in viewQ.columns:
-        viewQ = viewQ[viewQ["VISTORIADOR"].isin(allowed_vists)]
-    if not viewP.empty and "VISTORIADOR" in viewP.columns:
-        viewP = viewP[viewP["VISTORIADOR"].isin(allowed_vists)]
-
-    if viewQ.empty:
-        st.info("Sem registros de Qualidade no período/filtros para o tempo de casa selecionado."); st.stop()
-
-if viewP is None:
-    viewP = dfP.copy()
+    if set_vists_perfil is not None and "VISTORIADOR" in viewP.columns:
+        viewP = viewP[viewP["VISTORIADOR"].isin(set_vists_perfil)]
 
 
 # ------------------ KPIs ------------------
@@ -529,8 +516,8 @@ if "UNIDADE" in prev_base_cards.columns and len(f_unids):
     prev_base_cards = prev_base_cards[prev_base_cards["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in prev_base_cards.columns and len(f_vists):
     prev_base_cards = prev_base_cards[prev_base_cards["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
-if allowed_vists is not None and "VISTORIADOR" in prev_base_cards.columns:
-    prev_base_cards = prev_base_cards[prev_base_cards["VISTORIADOR"].isin(allowed_vists)]
+if "TEMPO_CASA" in prev_base_cards.columns and alvo_perfil is not None:
+    prev_base_cards = prev_base_cards[prev_base_cards["TEMPO_CASA"] == alvo_perfil]
 
 prev_total = int(len(prev_base_cards))
 prev_gg = int(prev_base_cards["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in prev_base_cards.columns else 0
@@ -568,8 +555,8 @@ if "UNIDADE" in mtd_all.columns and len(f_unids):
     mtd_all = mtd_all[mtd_all["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in mtd_all.columns and len(f_vists):
     mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
-if allowed_vists is not None and "VISTORIADOR" in mtd_all.columns:
-    mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin(allowed_vists)]
+if "TEMPO_CASA" in mtd_all.columns and alvo_perfil is not None:
+    mtd_all = mtd_all[mtd_all["TEMPO_CASA"] == alvo_perfil]
 
 erros_mtd_total = int(len(mtd_all))
 erros_mtd_gg = int(mtd_all["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in mtd_all.columns else 0
@@ -690,9 +677,6 @@ if start_d == end_d == today_local:
     if "DATA_TS" not in df_today.columns:
         df_today["DATA_TS"] = pd.to_datetime(df_today["DATA"], errors="coerce")
 
-    if allowed_vists is not None and "VISTORIADOR" in df_today.columns:
-        df_today = df_today[df_today["VISTORIADOR"].isin(allowed_vists)]
-
     ts_today = _as_naive_ts(df_today["DATA_TS"])
     have_time_today = ts_today.dt.hour.notna().any()
 
@@ -710,8 +694,8 @@ if start_d == end_d == today_local:
         df_yest = df_yest[df_yest["UNIDADE"].isin([_upper(u) for u in f_unids])]
     if len(f_vists) and "VISTORIADOR" in df_yest.columns:
         df_yest = df_yest[df_yest["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
-    if allowed_vists is not None and "VISTORIADOR" in df_yest.columns:
-        df_yest = df_yest[df_yest["VISTORIADOR"].isin(allowed_vists)]
+    if "TEMPO_CASA" in df_yest.columns and alvo_perfil is not None:
+        df_yest = df_yest[df_yest["TEMPO_CASA"] == alvo_perfil]
 
     if "DATA_TS" not in df_yest.columns:
         df_yest["DATA_TS"] = pd.to_datetime(df_yest["DATA"], errors="coerce")
@@ -742,7 +726,7 @@ if start_d == end_d == today_local:
 
     st.caption(f"<span class='small'>{note_text}</span>", unsafe_allow_html=True)
 else:
-    st.info("Para ver o comparativo HOJE x ONTEM, selecione o **dia atual** no filtro de período.")
+    st.info("Para ver o comparativo HOJE x ONTEM, selecione o dia atual no filtro de período.")
 
 
 # ------------------ GRÁFICOS ------------------
@@ -762,59 +746,130 @@ c1, c2 = st.columns(2)
 if "UNIDADE" in viewQ.columns:
     with c1:
         st.markdown('<div class="section">🏙️ Erros por unidade</div>', unsafe_allow_html=True)
-        by_city = (
-            viewQ.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD")
-        )
-        if not viewP.empty and "UNIDADE" in viewP.columns:
-            prod_city = (
-                viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
-            )
-        else:
-            prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
 
-        by_city = by_city.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
-        by_city["%ERRO"] = np.where(by_city["VIST"] > 0, (by_city["QTD"] / by_city["VIST"]) * 100, np.nan)
+        # duas colunas: TOTAL (à esquerda) e GG (à direita)
+        g_tot, g_gg = st.columns(2)
 
-        if by_city["%ERRO"].isna().all():
-            total_err = by_city["QTD"].sum()
-            by_city["%ERRO"] = np.where(total_err > 0, (by_city["QTD"] / total_err) * 100, np.nan)
-            y2_title = "% dos erros"
-        else:
-            y2_title = "% de erro (erros/vistorias)"
+        # ---------- TOTAL de erros por unidade ----------
+        with g_tot:
+            by_city = (
+                viewQ.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD")
+            )
 
-        by_city["PCT"] = by_city["%ERRO"] / 100.0
-        by_city = by_city.sort_values("QTD", ascending=False).reset_index(drop=True)
-        order = by_city["UNIDADE"].tolist()
+            if not viewP.empty and "UNIDADE" in viewP.columns:
+                prod_city = (
+                    viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
+                )
+            else:
+                prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
 
-        bars = (
-            alt.Chart(by_city).mark_bar().encode(
-                x=alt.X("UNIDADE:N", sort=order, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
-                y=alt.Y("QTD:Q", title="QTD"),
-                tooltip=["UNIDADE", "QTD", alt.Tooltip("PCT:Q", format=".1%", title=y2_title)],
+            by_city = by_city.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
+            by_city["%ERRO"] = np.where(by_city["VIST"] > 0, (by_city["QTD"] / by_city["VIST"]) * 100, np.nan)
+
+            if by_city["%ERRO"].isna().all():
+                total_err = by_city["QTD"].sum()
+                by_city["%ERRO"] = np.where(total_err > 0, (by_city["QTD"] / total_err) * 100, np.nan)
+                y2_title = "% dos erros"
+            else:
+                y2_title = "% de erro (erros/vistorias)"
+
+            by_city["PCT"] = by_city["%ERRO"] / 100.0
+            by_city = by_city.sort_values("QTD", ascending=False).reset_index(drop=True)
+            order = by_city["UNIDADE"].tolist()
+
+            bars = (
+                alt.Chart(by_city).mark_bar().encode(
+                    x=alt.X("UNIDADE:N", sort=order, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
+                    y=alt.Y("QTD:Q", title="QTD"),
+                    tooltip=["UNIDADE", "QTD", alt.Tooltip("PCT:Q", format=".1%", title=y2_title)],
+                )
             )
-        )
-        bar_labels = (
-            alt.Chart(by_city).mark_text(dy=-6).encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y="QTD:Q",
-                text=alt.Text("QTD:Q", format=".0f"),
+            bar_labels = (
+                alt.Chart(by_city).mark_text(dy=-6).encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y="QTD:Q",
+                    text=alt.Text("QTD:Q", format=".0f"),
+                )
             )
-        )
-        line = (
-            alt.Chart(by_city).mark_line(point=True, color="#b02300").encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y=alt.Y("PCT:Q", axis=alt.Axis(title=y2_title, format=".1%")),
+            line = (
+                alt.Chart(by_city).mark_line(point=True, color="#b02300").encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y=alt.Y("PCT:Q", axis=alt.Axis(title=y2_title, format=".1%")),
+                )
             )
-        )
-        line_labels = (
-            alt.Chart(by_city).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
-                x=alt.X("UNIDADE:N", sort=order),
-                y="PCT:Q",
-                text=alt.Text("PCT:Q", format=".1%"),
+            line_labels = (
+                alt.Chart(by_city).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
+                    x=alt.X("UNIDADE:N", sort=order),
+                    y="PCT:Q",
+                    text=alt.Text("PCT:Q", format=".1%"),
+                )
             )
-        )
-        chart = alt.layer(bars, bar_labels, line, line_labels).resolve_scale(y="independent").properties(height=340)
-        st.altair_chart(chart, use_container_width=True)
+            chart = alt.layer(bars, bar_labels, line, line_labels).resolve_scale(y="independent").properties(height=340)
+            st.subheader("Total")
+            st.altair_chart(chart, use_container_width=True)
+
+        # ---------- Somente GRAVE + GRAVÍSSIMO por unidade ----------
+        with g_gg:
+            mask_gg = viewQ["GRAVIDADE"].astype(str).str.upper().isin(grav_gg) if "GRAVIDADE" in viewQ.columns else pd.Series(False, index=viewQ.index)
+            viewQ_gg = viewQ[mask_gg]
+
+            by_city_gg = (
+                viewQ_gg.groupby("UNIDADE", dropna=False)["ERRO"].size().reset_index(name="QTD_GG")
+            )
+
+            if not viewP.empty and "UNIDADE" in viewP.columns:
+                prod_city = (
+                    viewP.groupby("UNIDADE", dropna=False)["IS_REV"].size().reset_index(name="VIST")
+                )
+            else:
+                prod_city = pd.DataFrame(columns=["UNIDADE", "VIST"])
+
+            by_city_gg = by_city_gg.merge(prod_city, on="UNIDADE", how="left").fillna({"VIST": 0})
+
+            by_city_gg["%ERRO_GG"] = np.where(by_city_gg["VIST"] > 0,
+                                              (by_city_gg["QTD_GG"] / by_city_gg["VIST"]) * 100, np.nan)
+            if by_city_gg["%ERRO_GG"].isna().all():
+                total_gg_global = by_city_gg["QTD_GG"].sum()
+                by_city_gg["%ERRO_GG"] = np.where(total_gg_global > 0,
+                                                  (by_city_gg["QTD_GG"] / total_gg_global) * 100, np.nan)
+                y2_title_gg = "% dos erros GG"
+            else:
+                y2_title_gg = "% de erro GG (GG/vistorias)"
+
+            by_city_gg["PCT_GG"] = by_city_gg["%ERRO_GG"] / 100.0
+            by_city_gg = by_city_gg.sort_values("QTD_GG", ascending=False).reset_index(drop=True)
+            order_gg = by_city_gg["UNIDADE"].tolist()
+
+            bars_gg = (
+                alt.Chart(by_city_gg).mark_bar().encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg, axis=alt.Axis(labelAngle=0, labelLimit=180), title="UNIDADE"),
+                    y=alt.Y("QTD_GG:Q", title="QTD (GG)"),
+                    tooltip=["UNIDADE", "QTD_GG", alt.Tooltip("PCT_GG:Q", format=".1%", title=y2_title_gg)],
+                )
+            )
+            bar_labels_gg = (
+                alt.Chart(by_city_gg).mark_text(dy=-6).encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y="QTD_GG:Q",
+                    text=alt.Text("QTD_GG:Q", format=".0f"),
+                )
+            )
+            line_gg = (
+                alt.Chart(by_city_gg).mark_line(point=True, color="#b02300").encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y=alt.Y("PCT_GG:Q", axis=alt.Axis(title=y2_title_gg, format=".1%")),
+                )
+            )
+            line_labels_gg = (
+                alt.Chart(by_city_gg).mark_text(color="#b02300", dy=-8, fontWeight="bold").encode(
+                    x=alt.X("UNIDADE:N", sort=order_gg),
+                    y="PCT_GG:Q",
+                    text=alt.Text("PCT_GG:Q", format=".1%"),
+                )
+            )
+            chart_gg = alt.layer(bars_gg, bar_labels_gg, line_gg, line_labels_gg).resolve_scale(y="independent").properties(height=340)
+            st.subheader("Grave + Gravíssimo")
+            st.altair_chart(chart_gg, use_container_width=True)
 
 if "GRAVIDADE" in viewQ.columns:
     with c2:
@@ -878,6 +933,7 @@ else:
 if not fast_mode:
     ex1, ex2 = st.columns(2)
 
+    # ===== PARETO =====
     with ex1:
         st.markdown('<div class="section">📈 Pareto de erros</div>', unsafe_allow_html=True)
 
@@ -889,12 +945,16 @@ if not fast_mode:
             if max_cats < 1:
                 st.info("Sem categorias suficientes para montar o Pareto.")
             else:
-                top_default = min(10, max_cats)
-                top_cats = st.slider(
-                    "Categorias no Pareto",
-                    min_value=1, max_value=max_cats, value=top_default,
-                    step=1, key=f"pareto_cats_{ref_year}{ref_month}",
-                )
+                if max_cats <= 1:
+                    top_cats = 1
+                    st.caption("Categorias no Pareto: 1")
+                else:
+                    top_default = min(10, max_cats)
+                    top_cats = st.slider(
+                        "Categorias no Pareto",
+                        min_value=1, max_value=max_cats, value=top_default,
+                        step=1, key=f"pareto_cats_{ref_year}{ref_month}",
+                    )
 
                 pareto = (
                     viewQ.groupby("ERRO", sort=False)["ERRO"]
@@ -912,10 +972,12 @@ if not fast_mode:
                     total = pareto["QTD"].sum()
                     pareto["%ACUM"] = pareto["ACUM"] / total * 100
 
-                    x_enc = alt.X("ERRO:N",
-                                  sort=alt.SortField(field="QTD", order="descending"),
-                                  axis=alt.Axis(labelAngle=0, labelLimit=180),
-                                  title="ERRO")
+                    x_enc = alt.X(
+                        "ERRO:N",
+                        sort=alt.SortField(field="QTD", order="descending"),
+                        axis=alt.Axis(labelAngle=0, labelLimit=180),
+                        title="ERRO",
+                    )
 
                     bars = alt.Chart(pareto).mark_bar().encode(
                         x=x_enc,
@@ -931,37 +993,47 @@ if not fast_mode:
                         y=alt.Y("%ACUM:Q", title="% Acumulado"),
                         color=alt.value("#b02300"),
                     )
-                    line_labels = alt.Chart(pareto).mark_text(
-                        dy=-8, baseline="bottom", color="#b02300", fontWeight="bold"
-                    ).encode(
-                        x=x_enc, y="%ACUM:Q", text=alt.Text("%ACUM:Q", format=".1f")
+                    line_labels = (
+                        alt.Chart(pareto)
+                        .mark_text(dy=-8, baseline="bottom", color="#b02300", fontWeight="bold")
+                        .encode(x=x_enc, y="%ACUM:Q", text=alt.Text("%ACUM:Q", format=".1f"))
                     )
 
-                    chart_pareto = alt.layer(bars, bar_labels, line, line_labels)\
-                                       .resolve_scale(y='independent')\
-                                       .properties(height=360)
+                    chart_pareto = (
+                        alt.layer(bars, bar_labels, line, line_labels)
+                        .resolve_scale(y="independent")
+                        .properties(height=360)
+                    )
                     st.altair_chart(chart_pareto, use_container_width=True)
 
                     max_topN = int(len(pareto))
-                    topN_sim = st.slider(
-                        "Quantos erros do topo considerar?",
-                        min_value=1, max_value=max_topN, value=min(8, max_topN),
-                        key=f"pareto_topN_{ref_year}{ref_month}",
-                    )
-                    reducao = st.slider(
-                        "Redução esperada nesses erros (%)",
-                        min_value=0, max_value=100, value=25,
-                        key=f"pareto_reducao_{ref_year}{ref_month}",
-                    )
+                    if max_topN <= 1:
+                        topN_sim = 1
+                        st.caption("Top considerado: 1")
+                        reducao = st.slider(
+                            "Redução esperada nesses erros (%)",
+                            min_value=0, max_value=100, value=25,
+                            key=f"pareto_reducao_{ref_year}{ref_month}",
+                        )
+                    else:
+                        topN_sim = st.slider(
+                            "Quantos erros do topo considerar?",
+                            min_value=1, max_value=max_topN, value=min(8, max_topN),
+                            key=f"pareto_topN_{ref_year}{ref_month}",
+                        )
+                        reducao = st.slider(
+                            "Redução esperada nesses erros (%)",
+                            min_value=0, max_value=100, value=25,
+                            key=f"pareto_reducao_{ref_year}{ref_month}",
+                        )
 
                     idx = min(topN_sim, max_topN) - 1
                     frac = float(pareto["%ACUM"].iloc[idx]) / 100.0
                     queda_total = frac * (reducao / 100.0) * 100.0
 
                     st.info(
-                        f"Os **Top {topN_sim}** explicam **{frac*100:.1f}%** do total. "
-                        f"Se você reduzir esses erros em **{reducao}%**, "
-                        f"o total cai cerca de **{queda_total:.1f}%**."
+                        f"Os Top {topN_sim} explicam {frac*100:.1f}% do total. "
+                        f"Se reduzir esses erros em {reducao}%, o total cai cerca de {queda_total:.1f}%."
                     )
 
     with ex2:
@@ -1043,6 +1115,7 @@ with col_dir:
                  .mean()
                  .reset_index(name="%GG")
         )
+        # ordena do maior %GG para o menor
         ana = ana.sort_values("%GG", ascending=False)
         ana["%GG"] = (ana["%GG"] * 100).round(1)
 
@@ -1058,8 +1131,8 @@ with col_dir:
 st.markdown('<div class="section">📅 Erros por dia da semana</div>', unsafe_allow_html=True)
 dow_map = {0:"Seg",1:"Ter",2:"Qua",3:"Qui",4:"Sex",5:"Sáb",6:"Dom"}
 dow = pd.to_datetime(viewQ["DATA"], errors="coerce").dt.dayofweek.map(dow_map)
-dow_df = pd.DataFrame({"DIA": dow}).value_counts().reset_index(name="QTD").rename(columns={"index":"DIA"})
-dow_df = dow_df.sort_index() if "DIA" not in dow_df.columns else dow_df
+dow_counts = dow.value_counts().reindex(list(dow_map.values()), fill_value=0)
+dow_df = pd.DataFrame({"DIA": dow_counts.index, "QTD": dow_counts.values})
 if not dow_df.empty:
     st.altair_chart(bar_with_labels(dow_df, "DIA", "QTD", x_title="DIA DA SEMANA"),
                     use_container_width=True)
@@ -1068,29 +1141,30 @@ if not dow_df.empty:
 # ------------------ % ERRO (casamento com Produção) ------------------
 st.markdown("---")
 st.markdown('<div class="section">📐 % de erro por vistoriador</div>', unsafe_allow_html=True)
+
 denom_mode = st.session_state.get("denom_mode_global", "Bruta (recomendado)")
 
-# Metas e tolerância
-META_ERRO     = 5.0
-META_ERRO_GG  = 2.0
-TOL_AMARELO   = 0.5
+# ============= METAS POR CIDADE – VELOX (GENÉRICO) =============
+TOL_AMARELO = 0.5  # tolerância em pontos percentuais
 
-def _farol(pct, meta, tol=TOL_AMARELO):
-    if pd.isna(pct): return "—"
-    diff = pct - meta
-    if diff <= 0:      return "🟢"
-    if diff <= tol:    return "🟡"
-    return "🔴"
+def _metas_cidade(cidade: str) -> tuple[float, float]:
+    """
+    Retorna (meta_erro_total, meta_erro_gg) para a cidade.
+    Aqui usamos um padrão único para todas as cidades.
+    Ajuste se quiser metas diferentes por unidade.
+    """
+    return (3.5, 1.5)
 
 # ------------------ PRODUÇÃO COM FALLBACK ------------------
 fallback_note = None
 
 def _make_prod(df_prod):
     if df_prod.empty:
-        return pd.DataFrame(columns=["VISTORIADOR","vist","rev","liq"])
+        return pd.DataFrame(columns=["VISTORIADOR", "vist", "rev", "liq"])
     out = (
         df_prod.groupby("VISTORIADOR", dropna=False)
-               .agg(vist=("IS_REV","size"), rev=("IS_REV","sum"))
+               .agg(vist=("IS_REV", "size"),
+                    rev=("IS_REV", "sum"))
                .reset_index()
     )
     out["liq"] = out["vist"] - out["rev"]
@@ -1101,54 +1175,95 @@ prod = _make_prod(viewP)
 if prod["vist"].sum() == 0:
     if not dfP.empty:
         s_p_dates_all = pd.to_datetime(dfP["__DATA__"], errors="coerce").dt.date
-        mask_mes_all = s_p_dates_all.map(lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month)
+        mask_mes_all = s_p_dates_all.map(
+            lambda d: isinstance(d, date) and d.year == ref_year and d.month == ref_month
+        )
         prod_month = dfP[mask_mes_all].copy()
         if "UNIDADE" in prod_month.columns and len(f_unids):
             prod_month = prod_month[prod_month["UNIDADE"].isin([_upper(u) for u in f_unids])]
         if "VISTORIADOR" in prod_month.columns and len(f_vists):
             prod_month = prod_month[prod_month["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
-        if allowed_vists is not None and "VISTORIADOR" in prod_month.columns:
-            prod_month = prod_month[prod_month["VISTORIADOR"].isin(allowed_vists)]
+        if set_vists_perfil is not None and "VISTORIADOR" in prod_month.columns:
+            prod_month = prod_month[prod_month["VISTORIADOR"].isin(set_vists_perfil)]
         prod = _make_prod(prod_month)
         if prod["vist"].sum() > 0:
             fallback_note = "Usando produção do mês (fallback), pois não houve produção no período selecionado."
 
 if prod["vist"].sum() == 0 and not dfP.empty:
-    dfP_global = dfP.copy()
-    if "UNIDADE" in dfP_global.columns and len(f_unids):
-        dfP_global = dfP_global[dfP_global["UNIDADE"].isin([_upper(u) for u in f_unids])]
-    if "VISTORIADOR" in dfP_global.columns and len(f_vists):
-        dfP_global = dfP_global[dfP_global["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
-    if allowed_vists is not None and "VISTORIADOR" in dfP_global.columns:
-        dfP_global = dfP_global[dfP_global["VISTORIADOR"].isin(allowed_vists)]
-    prod = _make_prod(dfP_global)
+    prod_all = dfP.copy()
+    if set_vists_perfil is not None and "VISTORIADOR" in prod_all.columns:
+        prod_all = prod_all[prod_all["VISTORIADOR"].isin(set_vists_perfil)]
+    prod = _make_prod(prod_all)
     fallback_note = "Usando produção global (fallback), pois não há produção no mês/período selecionado."
 
 # ------------------ QUALIDADE ------------------
 qual = (
     viewQ.groupby("VISTORIADOR", dropna=False)
-         .agg(erros=("ERRO","size"),
+         .agg(erros=("ERRO", "size"),
               erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum()))
          .reset_index()
 )
 
+# ------------------ CIDADE POR VISTORIADOR ------------------
+# Usa UNIDADE da produção; se não tiver, cai para UNIDADE da qualidade
+city_map = {}
+
+if "UNIDADE" in viewP.columns and not viewP.empty:
+    tmp = (
+        viewP.groupby("VISTORIADOR")["UNIDADE"]
+             .agg(lambda s: s.mode().iloc[0] if not s.mode().empty
+                  else (s.dropna().iloc[0] if s.dropna().any() else ""))
+    )
+    city_map.update(tmp.to_dict())
+
+if "UNIDADE" in viewQ.columns:
+    tmp_q = (
+        viewQ.groupby("VISTORIADOR")["UNIDADE"]
+             .agg(lambda s: s.mode().iloc[0] if not s.mode().empty
+                  else (s.dropna().iloc[0] if s.dropna().any() else ""))
+    )
+    for k, v in tmp_q.to_dict().items():
+        city_map.setdefault(k, v)
+
 # ------------------ BASE FINAL ------------------
 base = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
+base["CIDADE"] = base["VISTORIADOR"].map(city_map).fillna("")
+
 den = base["liq"] if denom_mode.startswith("Líquida") else base["vist"]
 den = den.replace({0: np.nan})
 
 base["%ERRO"]    = ((base["erros"]    / den) * 100).round(1)
 base["%ERRO_GG"] = ((base["erros_gg"] / den) * 100).round(1)
-base["FAROL_%ERRO"]    = base["%ERRO"].apply(lambda v: _farol(v, META_ERRO))
-base["FAROL_%ERRO_GG"] = base["%ERRO_GG"].apply(lambda v: _farol(v, META_ERRO_GG))
+
+def _farol_pct(pct, cidade, meta_total, meta_gg, is_gg=False, tol=TOL_AMARELO):
+    if pd.isna(pct):
+        return "—"
+    meta = meta_gg if is_gg else meta_total
+    diff = pct - meta
+    if diff <= 0:
+        return "🟢"
+    if diff <= tol:
+        return "🟡"
+    return "🔴"
+
+# aplica farol usando meta (igual para todas as cidades)
+farol_total = []
+farol_gg    = []
+for _, r in base.iterrows():
+    mt_total, mt_gg = _metas_cidade(r.get("CIDADE", ""))
+    farol_total.append(_farol_pct(r["%ERRO"],    r.get("CIDADE", ""), mt_total, mt_gg, is_gg=False))
+    farol_gg.append(   _farol_pct(r["%ERRO_GG"], r.get("CIDADE", ""), mt_total, mt_gg, is_gg=True))
+
+base["FAROL_%ERRO"]    = farol_total
+base["FAROL_%ERRO_GG"] = farol_gg
 
 # ------------------ FORMATAÇÃO E ORDENAÇÃO ------------------
 fmt = base.copy()
-for c in ["vist","rev","liq","erros","erros_gg"]:
+for c in ["vist", "rev", "liq", "erros", "erros_gg"]:
     fmt[c] = pd.to_numeric(fmt[c], errors="coerce").fillna(0).astype(int)
 
 def _fmt_val_pct(pct, emoji):
-    if pd.isna(pct): 
+    if pd.isna(pct):
         return "—"
     return f"{emoji} {pct:.1f}%".replace(".", ",")
 
@@ -1156,15 +1271,20 @@ fmt["%ERRO"]    = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO"],    r["FAROL_%ERRO
 fmt["%ERRO_GG"] = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO_GG"], r["FAROL_%ERRO_GG"]), axis=1)
 
 # Ordenação decrescente pelo valor numérico real (%ERRO)
-fmt_sorted = fmt.sort_values(by="%ERRO", key=lambda col: base.loc[col.index, "%ERRO"], ascending=False)
+fmt_sorted = fmt.sort_values(
+    by="%ERRO",
+    key=lambda col: base.loc[col.index, "%ERRO"],
+    ascending=False
+)
 
-cols_view = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+cols_view = ["CIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
 
 st.dataframe(
     fmt_sorted[cols_view],
     use_container_width=True,
     hide_index=True,
 )
+
 # ------------------ EXPORTAR EXCEL COM FAROL DE CORES ------------------
 try:
     from openpyxl import Workbook
@@ -1180,47 +1300,44 @@ else:
     ws = wb.active
     ws.title = "Erros por Vistoriador"
 
-    # Cabeçalho
-    headers = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+    # Cabeçalho (com CIDADE)
+    headers = ["CIDADE", "VISTORIADOR", "vist", "rev", "liq", "erros", "erros_gg", "%ERRO", "%ERRO_GG"]
     ws.append(headers)
 
-    # Linhas (usamos o DataFrame já ordenado e com farol calculado)
+    # Linhas
     for _, r in fmt_sorted.iterrows():
         ws.append([
+            r.get("CIDADE", ""),
             r["VISTORIADOR"],
             int(r["vist"]), int(r["rev"]), int(r["liq"]),
             int(r["erros"]), int(r["erros_gg"]),
-            r["%ERRO"], r["%ERRO_GG"]
+            r["%ERRO"], r["%ERRO_GG"],
         ])
 
-    # Função para pintar células conforme o farol
     def _fill_from_farol(emoji: str) -> PatternFill:
         if isinstance(emoji, str) and "🟢" in emoji:
-            return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # verde
+            return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
         if isinstance(emoji, str) and "🟡" in emoji:
-            return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # amarelo
+            return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
         if isinstance(emoji, str) and "🔴" in emoji:
-            return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # vermelho
+            return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         return PatternFill(fill_type=None)
 
-    # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
-    # Começa na linha 2 (linha 1 é o cabeçalho)
+    # Aplicar cores nas colunas %ERRO (H) e %ERRO_GG (I)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
         fill_total = _fill_from_farol(r.get("FAROL_%ERRO"))
         fill_gg    = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
 
-        ws[f"G{i}"].fill = fill_total
-        ws[f"H{i}"].fill = fill_gg
+        ws[f"H{i}"].fill = fill_total
+        ws[f"I{i}"].fill = fill_gg
 
-        ws[f"G{i}"].alignment = Alignment(horizontal="center")
         ws[f"H{i}"].alignment = Alignment(horizontal="center")
+        ws[f"I{i}"].alignment = Alignment(horizontal="center")
 
-    # Largura das colunas
-    widths = {"A":28, "B":10, "C":10, "D":10, "E":10, "F":10, "G":12, "H":12}
+    widths = {"A":18, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":14, "I":14}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
-    # Salvar em memória e criar botão
     xbuf = io.BytesIO()
     wb.save(xbuf)
     xbuf.seek(0)
@@ -1228,19 +1345,17 @@ else:
     st.download_button(
         label="📥 Baixar Excel com farol de cores",
         data=xbuf,
-        file_name="erros_por_vistoriador.xlsx",
+        file_name="erros_por_vistoriador_velox.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 # ------------------ LEGENDA ------------------
 with st.expander("Legenda do farol", expanded=False):
-    st.write(f"🟢 Dentro da meta · %ERRO ≤ {META_ERRO:.1f}% · %ERRO_GG ≤ {META_ERRO_GG:.1f}%")
+    st.write("🟢 Dentro da meta de qualidade")
     st.write(f"🟡 Até {TOL_AMARELO:.1f} pp acima da meta")
     st.write("🔴 Acima da meta + tolerância")
-
 if fallback_note:
     st.caption(f"ℹ️ {fallback_note}")
-
 
 # ------------------ TENDÊNCIA DE ERROS (projeção) ------------------
 st.markdown("---")
@@ -1324,7 +1439,7 @@ if not fast_mode:
     if len(f_vist):     det = det[det["VISTORIADOR"].isin(f_vist)]    if "VISTORIADOR" in det.columns else det
     if len(f_analista): det = det[det["ANALISTA"].isin(f_analista)]   if "ANALISTA"   in det.columns else det
 
-    det_cols = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
+    det_cols = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS","TEMPO_CASA"]
     for c in det_cols:
         if c not in det.columns: det[c] = ""
     det = det[det_cols].sort_values(["DATA","UNIDADE","VISTORIADOR"])
@@ -1353,8 +1468,8 @@ tab_fmt = tab.copy()
 tab_fmt["VAR_%"] = tab_fmt["VAR_%"].map(lambda x: "—" if pd.isna(x) else f"{x:.1f}%".replace(".", ","))
 
 st.caption(
-    f"Período atual: **{periodo_atual_ini:%d/%m/%Y} – {periodo_atual_fim:%d/%m/%Y}**  •  "
-    f"Período anterior: **{prev_ini:%d/%m/%Y} – {prev_fim:%d/%m/%Y}**"
+    f"Período atual: {periodo_atual_ini:%d/%m/%Y} – {periodo_atual_fim:%d/%m/%Y}  •  "
+    f"Período anterior: {prev_ini:%d/%m/%Y} – {prev_fim:%d/%m/%Y}"
 )
 st.dataframe(
     tab_fmt.sort_values("ERROS_ATUAL", ascending=False)[
@@ -1514,9 +1629,9 @@ if not fast_mode:
 
         legend_parts = []
         for i, (prefix, di, dfim) in enumerate(meta, start=1):
-            label = f"**Semana {i}**: {di:%d/%m}–{dfim:%d/%m}"
+            label = f"Semana {i}: {di:%d/%m}–{dfim:%d/%m}"
             if i == k:
-                label = label.replace(f"**Semana {i}**", f"**Semana {i} (atual)**")
+                label = label.replace(f"Semana {i}", f"Semana {i} (atual)")
             legend_parts.append(label)
         st.caption("  ·  ".join(legend_parts))
 
@@ -1530,7 +1645,7 @@ rank = (base.copy())
 rank = rank[den > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
 
 den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
-col_titulo_den = "vistórias líquidas" if den_col == "liq" else "vistórias"
+col_titulo_den = "vistorias líquidas" if den_col == "liq" else "vistorias"
 cols_rank = ["VISTORIADOR", den_col, "erros", "%ERRO", "%ERRO_GG"]
 rank_view = rank[cols_rank].rename(columns={den_col: col_titulo_den})
 
@@ -1555,11 +1670,11 @@ st.markdown('<div class="section">🚨 Tentativa de Fraude — Detalhamento</div
 fraude_mask = viewQ["ERRO"].astype(str).str.upper().str.contains(r"\bTENTATIVA DE FRAUDE\b", na=False)
 df_fraude = viewQ[fraude_mask].copy()
 if df_fraude.empty:
-    st.info("Nenhum registro de **Tentativa de Fraude** no período/filtros selecionados.")
+    st.info("Nenhum registro de Tentativa de Fraude no período/filtros selecionados.")
 else:
-    cols_fraude = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS"]
+    cols_fraude = ["DATA","UNIDADE","VISTORIADOR","PLACA","ERRO","GRAVIDADE","ANALISTA","OBS","TEMPO_CASA"]
     for c in cols_fraude:
         if c not in df_fraude.columns: df_fraude[c] = ""
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
-    st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+    st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
