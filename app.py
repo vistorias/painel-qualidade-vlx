@@ -301,10 +301,12 @@ def read_prod_month(month_sheet_id: str, ym: Optional[str] = None) -> Tuple[pd.D
         if rows:
             dm = pd.DataFrame(rows)
             cols = list(dm.columns)
-            c_vist = _find_col(cols, "VISTORIADOR")
-            c_unid = _find_col(cols, "UNIDADE")
-            c_meta = _find_col(cols, "META_MENSAL", "META MENSAL", "META")
-            c_du   = _find_col(cols, "DIAS ÚTEIS", "DIAS UTEIS", "DIAS_UTEIS")
+            c_vist  = _find_col(cols, "VISTORIADOR")
+            c_unid  = _find_col(cols, "UNIDADE")
+            c_meta  = _find_col(cols, "META_MENSAL", "META MENSAL", "META")
+            c_du    = _find_col(cols, "DIAS ÚTEIS", "DIAS UTEIS", "DIAS_UTEIS")
+            c_tempo = _find_col(cols, "TEMPO CASA", "TEMPO_CASA", "TEMPO DE CASA", "TEMPODECASA")
+
             out = pd.DataFrame()
             out["VISTORIADOR"] = dm[c_vist].astype(str).map(_upper) if c_vist else ""
             out["UNIDADE"] = dm[c_unid].astype(str).map(_upper) if c_unid else ""
@@ -312,6 +314,7 @@ def read_prod_month(month_sheet_id: str, ym: Optional[str] = None) -> Tuple[pd.D
             out["DIAS_UTEIS"]  = pd.to_numeric(dm[c_du], errors="coerce").fillna(np.nan)
             out["DIAS_UTEIS"]  = out["DIAS_UTEIS"].astype(float).round().astype("Int64")
             out["YM"] = ym or ""
+            out["TEMPO_CASA"] = dm[c_tempo].astype(str).map(_upper) if c_tempo else ""
             metas = out
     except Exception:
         metas = pd.DataFrame()
@@ -366,7 +369,7 @@ if show_tech:
     if er_q:
         with st.expander("Falhas (Qualidade)"):
             for sid, e in er_q: st.write(sid); st.exception(e)
-    if ok_p: st.success("Produção conectada em:\n\n- " + "\n- ".join(ok_p))
+    if ok_p: st.success("Produção conectado em:\n\n- " + "\n- ".join(ok_p))
     if er_p:
         with st.expander("Falhas (Produção)"):
             for sid, e in er_p: st.write(sid); st.exception(e)
@@ -376,7 +379,10 @@ if not dq_all:
 
 dfQ = pd.concat(dq_all, ignore_index=True)
 dfP = pd.concat(dp_all, ignore_index=True) if dp_all else pd.DataFrame(columns=["VISTORIADOR","__DATA__","IS_REV","UNIDADE"])
-dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame(columns=["VISTORIADOR","UNIDADE","META_MENSAL","DIAS_UTEIS","YM"])
+dfMetas = pd.concat(metas_all, ignore_index=True) if metas_all else pd.DataFrame(columns=["VISTORIADOR","UNIDADE","META_MENSAL","DIAS_UTEIS","YM","TEMPO_CASA"])
+
+# variável global para filtro de tempo de casa
+allowed_vists = None
 
 
 # ------------------ FILTROS PRINCIPAIS ------------------
@@ -444,6 +450,48 @@ if not dfP.empty:
 else:
     viewP = dfP.copy()
 
+# -------- Filtro TEMPO DE CASA (Novato / Veterano) --------
+has_tempo = False
+novatos, veteranos = set(), set()
+
+if ("TEMPO_CASA" in dfMetas.columns) and (not dfMetas.empty):
+    metas_cur_tempo = dfMetas[dfMetas["YM"].fillna("").astype(str) == ym_sel].copy()
+    if not metas_cur_tempo.empty:
+        has_tempo = True
+        metas_cur_tempo["VISTORIADOR"] = metas_cur_tempo["VISTORIADOR"].astype(str).map(_upper)
+        metas_cur_tempo["TEMPO_CASA"] = metas_cur_tempo["TEMPO_CASA"].astype(str).map(_upper)
+        novatos = set(metas_cur_tempo.loc[metas_cur_tempo["TEMPO_CASA"] == "NOVATO", "VISTORIADOR"])
+        veteranos = set(metas_cur_tempo.loc[metas_cur_tempo["TEMPO_CASA"] == "VETERANO", "VISTORIADOR"])
+
+if has_tempo:
+    tempo_choice = st.radio(
+        "Tempo de casa",
+        ["Todos", "Somente Novatos", "Somente Veteranos"],
+        index=0,
+        horizontal=True,
+    )
+    if tempo_choice == "Somente Novatos":
+        allowed_vists = novatos
+    elif tempo_choice == "Somente Veteranos":
+        allowed_vists = veteranos
+    else:
+        allowed_vists = None
+else:
+    tempo_choice = "Todos"
+    allowed_vists = None
+
+if allowed_vists is not None and len(allowed_vists):
+    if "VISTORIADOR" in viewQ.columns:
+        viewQ = viewQ[viewQ["VISTORIADOR"].isin(allowed_vists)]
+    if not viewP.empty and "VISTORIADOR" in viewP.columns:
+        viewP = viewP[viewP["VISTORIADOR"].isin(allowed_vists)]
+
+    if viewQ.empty:
+        st.info("Sem registros de Qualidade no período/filtros para o tempo de casa selecionado."); st.stop()
+
+if viewP is None:
+    viewP = dfP.copy()
+
 
 # ------------------ KPIs ------------------
 grav_gg = {"GRAVE", "GRAVISSIMO", "GRAVÍSSIMO"}
@@ -481,6 +529,8 @@ if "UNIDADE" in prev_base_cards.columns and len(f_unids):
     prev_base_cards = prev_base_cards[prev_base_cards["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in prev_base_cards.columns and len(f_vists):
     prev_base_cards = prev_base_cards[prev_base_cards["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+if allowed_vists is not None and "VISTORIADOR" in prev_base_cards.columns:
+    prev_base_cards = prev_base_cards[prev_base_cards["VISTORIADOR"].isin(allowed_vists)]
 
 prev_total = int(len(prev_base_cards))
 prev_gg = int(prev_base_cards["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in prev_base_cards.columns else 0
@@ -518,6 +568,8 @@ if "UNIDADE" in mtd_all.columns and len(f_unids):
     mtd_all = mtd_all[mtd_all["UNIDADE"].isin([_upper(u) for u in f_unids])]
 if "VISTORIADOR" in mtd_all.columns and len(f_vists):
     mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+if allowed_vists is not None and "VISTORIADOR" in mtd_all.columns:
+    mtd_all = mtd_all[mtd_all["VISTORIADOR"].isin(allowed_vists)]
 
 erros_mtd_total = int(len(mtd_all))
 erros_mtd_gg = int(mtd_all["GRAVIDADE"].isin(grav_gg).sum()) if "GRAVIDADE" in mtd_all.columns else 0
@@ -638,6 +690,9 @@ if start_d == end_d == today_local:
     if "DATA_TS" not in df_today.columns:
         df_today["DATA_TS"] = pd.to_datetime(df_today["DATA"], errors="coerce")
 
+    if allowed_vists is not None and "VISTORIADOR" in df_today.columns:
+        df_today = df_today[df_today["VISTORIADOR"].isin(allowed_vists)]
+
     ts_today = _as_naive_ts(df_today["DATA_TS"])
     have_time_today = ts_today.dt.hour.notna().any()
 
@@ -655,6 +710,8 @@ if start_d == end_d == today_local:
         df_yest = df_yest[df_yest["UNIDADE"].isin([_upper(u) for u in f_unids])]
     if len(f_vists) and "VISTORIADOR" in df_yest.columns:
         df_yest = df_yest[df_yest["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+    if allowed_vists is not None and "VISTORIADOR" in df_yest.columns:
+        df_yest = df_yest[df_yest["VISTORIADOR"].isin(allowed_vists)]
 
     if "DATA_TS" not in df_yest.columns:
         df_yest["DATA_TS"] = pd.to_datetime(df_yest["DATA"], errors="coerce")
@@ -1050,12 +1107,21 @@ if prod["vist"].sum() == 0:
             prod_month = prod_month[prod_month["UNIDADE"].isin([_upper(u) for u in f_unids])]
         if "VISTORIADOR" in prod_month.columns and len(f_vists):
             prod_month = prod_month[prod_month["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+        if allowed_vists is not None and "VISTORIADOR" in prod_month.columns:
+            prod_month = prod_month[prod_month["VISTORIADOR"].isin(allowed_vists)]
         prod = _make_prod(prod_month)
         if prod["vist"].sum() > 0:
             fallback_note = "Usando produção do mês (fallback), pois não houve produção no período selecionado."
 
 if prod["vist"].sum() == 0 and not dfP.empty:
-    prod = _make_prod(dfP.copy())
+    dfP_global = dfP.copy()
+    if "UNIDADE" in dfP_global.columns and len(f_unids):
+        dfP_global = dfP_global[dfP_global["UNIDADE"].isin([_upper(u) for u in f_unids])]
+    if "VISTORIADOR" in dfP_global.columns and len(f_vists):
+        dfP_global = dfP_global[dfP_global["VISTORIADOR"].isin([_upper(v) for v in f_vists])]
+    if allowed_vists is not None and "VISTORIADOR" in dfP_global.columns:
+        dfP_global = dfP_global[dfP_global["VISTORIADOR"].isin(allowed_vists)]
+    prod = _make_prod(dfP_global)
     fallback_note = "Usando produção global (fallback), pois não há produção no mês/período selecionado."
 
 # ------------------ QUALIDADE ------------------
@@ -1497,7 +1563,3 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo **ERRO** é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
-
-
-
-
