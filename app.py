@@ -1149,11 +1149,11 @@ def _norm_city(x: str) -> str:
     return _strip_accents(_upper(x))
 
 CITY_METAS = {
-    _norm_city("ESTREITO"):     (3.5, 1.5),
-    _norm_city("GRAJAÚ"):       (3.0, 1.5),
-    _norm_city("IMPERATRIZ"):   (3.5, 1.5),
-    _norm_city("PEDREIRAS"):    (3.5, 1.5),
-    _norm_city("SÃO LUÍS"):     (3.5, 1.5),
+    _norm_city("ESTREITO"):     (5.0, 2.0),
+    _norm_city("GRAJAÚ"):       (5.0, 2.0),
+    _norm_city("IMPERATRIZ"):   (5.0, 2.0),
+    _norm_city("PEDREIRAS"):    (5.0, 2.0),
+    _norm_city("SÃO LUIS"):     (5.0, 2.0),
 }
 
 def _metas_cidade(cidade: str) -> tuple[float, float]:
@@ -1686,4 +1686,5 @@ else:
     df_fraude = df_fraude[cols_fraude].sort_values(["DATA","UNIDADE","VISTORIADOR"])
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
+
 
