@@ -1687,6 +1687,34 @@ else:
     st.dataframe(df_fraude, use_container_width=True, hide_index=True)
     st.caption('<div class="table-note">* Somente linhas cujo ERRO é exatamente “TENTATIVA DE FRAUDE”.</div>', unsafe_allow_html=True)
 
+# ================== MAPA VISTORIADOR → CIDADE ==================
+# Tenta montar o mapa primeiro pela PRODUÇÃO. Se não tiver,
+# usa a base de Qualidade. Se não tiver nenhuma, fica vazio.
+city_map = {}
+
+try:
+    base_city = pd.DataFrame()
+
+    if ("UNIDADE" in viewP.columns) and ("VISTORIADOR" in viewP.columns) and (not viewP.empty):
+        base_city = viewP[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in dfP.columns) and ("VISTORIADOR" in dfP.columns) and (not dfP.empty):
+        base_city = dfP[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in viewQ.columns) and ("VISTORIADOR" in viewQ.columns):
+        base_city = viewQ[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in dfQ.columns) and ("VISTORIADOR" in dfQ.columns):
+        base_city = dfQ[["VISTORIADOR", "UNIDADE"]].copy()
+
+    if not base_city.empty:
+        base_city["VISTORIADOR"] = base_city["VISTORIADOR"].astype(str).map(_upper)
+        base_city["UNIDADE"] = base_city["UNIDADE"].astype(str).map(_upper)
+        base_city = base_city.drop_duplicates(subset=["VISTORIADOR"])
+        city_map = dict(zip(base_city["VISTORIADOR"], base_city["UNIDADE"]))
+    else:
+        city_map = {}
+except Exception:
+    city_map = {}
+# ===============================================================
+
 # ------------------ HISTÓRICO BOTTOM 5 (últimos 3 meses) ------------------
 st.markdown("---")
 st.markdown(
@@ -1720,6 +1748,8 @@ else:
     else:
         # Base com nomes dos bottom 5 (do mês atual)
         hist_df = pd.DataFrame({"VISTORIADOR": sorted(set(bottom_names))})
+        # CIDADE do colaborador
+        hist_df["CIDADE"] = hist_df["VISTORIADOR"].map(city_map).fillna("")
 
         labels_legenda = []
 
@@ -1864,8 +1894,8 @@ else:
                 pass
             hist_df = hist_df.iloc[np.argsort(-order_key)].reset_index(drop=True)
 
-        # Colunas na ordem: nome, situação, reincidência, depois meses
-        cols_show = ["VISTORIADOR", "Situação", "Meses no bottom"]
+        # Colunas na ordem: cidade, nome, situação, reincidência, depois meses
+        cols_show = ["CIDADE", "VISTORIADOR", "Situação", "Meses no bottom"]
         for label_mes in labels_legenda:
             pct_col   = f"%Erro {label_mes}"
             pctgg_col = f"%Erro GG {label_mes}"
@@ -1893,3 +1923,63 @@ else:
             + legenda_txt
         )
 
+        # ---------- EXPORTAR EXCEL COLORIDO ----------
+        if not ok_openpyxl:
+            st.warning("openpyxl não disponível — exportação do histórico desativada.")
+        else:
+            wb2 = Workbook()
+            ws2 = wb2.active
+            ws2.title = "Histórico Bottom 5"
+
+            headers = list(out_hist.columns)
+            ws2.append(headers)
+
+            # índice da coluna Situação (para colorir)
+            idx_sit = headers.index("Situação") + 1
+
+            def _fill_situacao(txt: str) -> PatternFill:
+                txt = str(txt)
+                if "3 meses" in txt:
+                    return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # vermelho claro
+                if "2 meses" in txt:
+                    return PatternFill(start_color="FFE599", end_color="FFE599", fill_type="solid")  # amarelo forte
+                if "Entrou agora" in txt:
+                    return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # amarelo claro
+                if "Saiu do bottom" in txt:
+                    return PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")  # verde claro
+                return PatternFill(fill_type=None)
+
+            red_fill = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
+
+            for i, (_, r) in enumerate(out_hist.iterrows(), start=2):
+                ws2.append([r[col] for col in headers])
+
+                # cor da Situação
+                ws2.cell(row=i, column=idx_sit).fill = _fill_situacao(r.get("Situação", ""))
+
+                # colunas Bottom mm/aaaa → vermelho quando 🔴
+                for j, col in enumerate(headers, start=1):
+                    if col.startswith("Bottom "):
+                        if "🔴" in str(r.get(col, "")):
+                            ws2.cell(row=i, column=j).fill = red_fill
+
+            # larguras básicas
+            widths = {
+                "A": 16,   # CIDADE
+                "B": 28,   # VISTORIADOR
+                "C": 24,   # Situação
+                "D": 16,   # Meses no bottom
+            }
+            for col_letter, w in widths.items():
+                ws2.column_dimensions[col_letter].width = w
+
+            xbuf2 = io.BytesIO()
+            wb2.save(xbuf2)
+            xbuf2.seek(0)
+
+            st.download_button(
+                label="📥 Baixar histórico Bottom 5 (Excel)",
+                data=xbuf2,
+                file_name="historico_bottom5_starcheck.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
