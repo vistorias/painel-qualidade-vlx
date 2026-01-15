@@ -1149,11 +1149,11 @@ def _norm_city(x: str) -> str:
     return _strip_accents(_upper(x))
 
 CITY_METAS = {
-    _norm_city("ESTREITO"):     (5.0, 2.0),
-    _norm_city("GRAJAÚ"):       (5.0, 2.0),
-    _norm_city("IMPERATRIZ"):   (5.0, 2.0),
-    _norm_city("PEDREIRAS"):    (5.0, 2.0),
-    _norm_city("SÃO LUIS"):     (5.0, 2.0),
+    _norm_city("ESTREITO"):     (3.5, 1.5),
+    _norm_city("GRAJAÚ"):       (3.5, 1.5),
+    _norm_city("IMPERATRIZ"):   (3.5, 1.5),
+    _norm_city("PEDREIRAS"):    (3.5, 1.5),
+    _norm_city("SÃO LUIS"):     (3.5, 1.5),
 }
 
 def _metas_cidade(cidade: str) -> tuple[float, float]:
@@ -1983,3 +1983,4 @@ else:
                 file_name="historico_bottom5_starcheck.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
