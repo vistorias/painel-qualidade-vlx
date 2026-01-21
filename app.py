@@ -1683,268 +1683,276 @@ except Exception:
 # ------------------ HISTÓRICO BOTTOM 5 (últimos 3 meses) ------------------
 st.markdown("---")
 st.markdown(
-    '<div class="section">📚 Histórico dos Bottom 5 (últimos 3 meses)</div>',
+    '<div class="section">📚 Histórico — não bateu a meta (últimos 3 meses)</div>',
     unsafe_allow_html=True
 )
 
-# Nomes dos 5 piores já calculados acima (worst5)
-bottom_names = []
-try:
-    bottom_names = worst5["VISTORIADOR"].astype(str).tolist()
-except Exception:
-    bottom_names = []
+# Critério do "não bateu meta"
+crit = st.radio(
+    "Critério para considerar que NÃO bateu a meta no mês",
+    ["%Erro total (meta 3,5%)", "Qualquer meta (%Erro 3,5% OU %Erro GG 1,5%)"],
+    horizontal=True,
+    index=0,
+    key="crit_nao_bateu_meta_hist"
+)
 
-if not bottom_names:
-    st.info("Ainda não há vistoriadores no ranking de piores para montar o histórico.")
+def _month_slice_q(df_all_q: pd.DataFrame, ano: int, mes: int,
+                   f_unids_local, perfil_local) -> pd.DataFrame:
+    dq_m = df_all_q.copy()
+    dt_q = pd.to_datetime(dq_m["DATA"], errors="coerce")
+    mask_mq = (dt_q.dt.year.eq(ano) & dt_q.dt.month.eq(mes))
+    dq_m = dq_m[mask_mq].copy()
+
+    # mesmos filtros de unidade e perfil do topo
+    if len(f_unids_local) and "UNIDADE" in dq_m.columns:
+        dq_m = dq_m[dq_m["UNIDADE"].isin([_upper(u) for u in f_unids_local])]
+
+    if "TEMPO_CASA" in dq_m.columns and perfil_local != "Todos":
+        alvo = "NOVATO" if perfil_local == "Novatos" else "VETERANO"
+        dq_m = dq_m[dq_m["TEMPO_CASA"] == alvo]
+
+    return dq_m
+
+def _month_slice_p(df_all_p: pd.DataFrame, ano: int, mes: int,
+                   f_unids_local, set_vists_local) -> pd.DataFrame:
+    if df_all_p.empty:
+        return df_all_p.copy()
+
+    dp_m = df_all_p.copy()
+    dt_p = pd.to_datetime(dp_m["__DATA__"], errors="coerce")
+    mask_mp = (dt_p.dt.year.eq(ano) & dt_p.dt.month.eq(mes))
+    dp_m = dp_m[mask_mp].copy()
+
+    if len(f_unids_local) and "UNIDADE" in dp_m.columns:
+        dp_m = dp_m[dp_m["UNIDADE"].isin([_upper(u) for u in f_unids_local])]
+
+    # aplica perfil (se já foi calculado lá em cima)
+    if set_vists_local is not None and "VISTORIADOR" in dp_m.columns:
+        dp_m = dp_m[dp_m["VISTORIADOR"].isin(set_vists_local)]
+
+    return dp_m
+
+def _build_month_base(dq_m: pd.DataFrame, dp_m: pd.DataFrame) -> pd.DataFrame:
+    # produção
+    prod_m = _make_prod(dp_m)
+
+    # qualidade
+    if dq_m.empty:
+        qual_m = pd.DataFrame(columns=["VISTORIADOR", "erros", "erros_gg"])
+    else:
+        qual_m = (
+            dq_m.groupby("VISTORIADOR", dropna=False)
+                .agg(
+                    erros=("ERRO", "size"),
+                    erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum())
+                )
+                .reset_index()
+        )
+
+    base_m = prod_m.merge(qual_m, on="VISTORIADOR", how="outer").fillna(0)
+
+    den_m = base_m["liq"] if denom_mode.startswith("Líquida") else base_m["vist"]
+    den_m = den_m.replace({0: np.nan})
+
+    base_m["%ERRO"] = ((base_m["erros"] / den_m) * 100).round(1)
+    base_m["%ERRO_GG"] = ((base_m["erros_gg"] / den_m) * 100).round(1)
+
+    return base_m
+
+def _fail_names_from_base(base_m: pd.DataFrame) -> list:
+    # somente quem tem denominador > 0 e % calculável
+    den_m = base_m["liq"] if denom_mode.startswith("Líquida") else base_m["vist"]
+    ok = base_m.copy()
+    ok = ok[den_m > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
+
+    if ok.empty:
+        return []
+
+    if crit.startswith("%Erro total"):
+        bad = ok[ok["%ERRO"] > META_ERRO]
+    else:
+        bad = ok[(ok["%ERRO"] > META_ERRO) | (ok["%ERRO_GG"] > META_ERRO_GG)]
+
+    return bad["VISTORIADOR"].astype(str).tolist()
+
+# ----- mês atual selecionado: usa MÊS CHEIO (não depende do range do topo) -----
+dq_cur_full = _month_slice_q(dfQ, ref_year, ref_month, f_unids, perfil_sel)
+dp_cur_full = _month_slice_p(dfP, ref_year, ref_month, f_unids, set_vists_perfil)
+
+base_cur_full = _build_month_base(dq_cur_full, dp_cur_full)
+fail_names = _fail_names_from_base(base_cur_full)
+
+if not fail_names:
+    st.info("Nenhum colaborador fora da meta no mês selecionado (com os filtros atuais).")
 else:
     # ym_all = lista de meses disponíveis no formato 'AAAA-MM'
-    # ym_sel  = mês atual selecionado no topo
+    # ym_sel = mês atual selecionado no topo (AAAA-MM)
     try:
         idx_cur = ym_all.index(ym_sel)
     except ValueError:
         idx_cur = len(ym_all) - 1
 
-    # Últimos 3 meses: atual + até 2 anteriores
     ini = max(0, idx_cur - 2)
     meses_janela = ym_all[ini: idx_cur + 1]
 
-    if not meses_janela:
-        st.info("Não há meses suficientes na base para montar o histórico.")
-    else:
-        # Base com nomes dos bottom 5 (do mês atual)
-        hist_df = pd.DataFrame({"VISTORIADOR": sorted(set(bottom_names))})
-        # CIDADE do colaborador
-        hist_df["CIDADE"] = hist_df["VISTORIADOR"].map(city_map).fillna("")
+    hist_df = pd.DataFrame({"VISTORIADOR": sorted(set([str(x) for x in fail_names]))})
+    hist_df["CIDADE"] = hist_df["VISTORIADOR"].map(city_map).fillna("")
 
-        labels_legenda = []
+    labels_legenda = []
 
-        for ym in meses_janela:
-            ano = int(ym[:4])
-            mes = int(ym[5:7])
-            label_mes = f"{mes:02d}/{ano}"
-            labels_legenda.append(label_mes)
+    for ym in meses_janela:
+        ano = int(ym[:4])
+        mes = int(ym[5:7])
+        label_mes = f"{mes:02d}/{ano}"
+        labels_legenda.append(label_mes)
 
-            # --------- BASE DE QUALIDADE E PRODUÇÃO POR MÊS ---------
-            if ym == ym_sel:
-                # MÊS ATUAL → usa exatamente o mesmo recorte do painel
-                dq_m = viewQ.copy()
-                dp_m = viewP.copy()
-            else:
-                # MÊS ANTERIOR → mês cheio, com mesmos filtros de unidade/perfil
-                # Qualidade
-                dq_m = dfQ.copy()
-                dt_q = pd.to_datetime(dq_m["DATA"], errors="coerce")
-                mask_mq = (dt_q.dt.year.eq(ano) & dt_q.dt.month.eq(mes))
-                dq_m = dq_m[mask_mq].copy()
+        # recorta mês (sempre mês cheio, com filtros)
+        dq_m = _month_slice_q(dfQ, ano, mes, f_unids, perfil_sel)
+        dp_m = _month_slice_p(dfP, ano, mes, f_unids, set_vists_perfil)
 
-                if len(f_unids) and "UNIDADE" in dq_m.columns:
-                    dq_m = dq_m[dq_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
-                if "TEMPO_CASA" in dq_m.columns and perfil_sel != "Todos":
-                    alvo = "NOVATO" if perfil_sel == "Novatos" else "VETERANO"
-                    dq_m = dq_m[dq_m["TEMPO_CASA"] == alvo]
+        base_m = _build_month_base(dq_m, dp_m)
 
-                # Produção
-                if not dfP.empty:
-                    dp_m = dfP.copy()
-                    dt_p = pd.to_datetime(dp_m["__DATA__"], errors="coerce")
-                    mask_mp = (dt_p.dt.year.eq(ano) & dt_p.dt.month.eq(mes))
-                    dp_m = dp_m[mask_mp].copy()
+        # conjunto de "fora da meta" naquele mês
+        bad_m = set(_fail_names_from_base(base_m))
 
-                    if len(f_unids) and "UNIDADE" in dp_m.columns:
-                        dp_m = dp_m[dp_m["UNIDADE"].isin([_upper(u) for u in f_unids])]
-                    if set_vists_perfil is not None and "VISTORIADOR" in dp_m.columns:
-                        dp_m = dp_m[dp_m["VISTORIADOR"].isin(set_vists_perfil)]
-                else:
-                    dp_m = dfP.copy()
+        tmp = base_m[["VISTORIADOR", "%ERRO", "%ERRO_GG"]].copy()
+        tmp["VISTORIADOR"] = tmp["VISTORIADOR"].astype(str)
+        tmp = tmp[tmp["VISTORIADOR"].isin(hist_df["VISTORIADOR"])]
 
-            # Produção agrupada (reaproveita função _make_prod)
-            prod_m = _make_prod(dp_m)
+        tmp = tmp.rename(columns={
+            "%ERRO":    f"%Erro {label_mes}",
+            "%ERRO_GG": f"%Erro GG {label_mes}",
+        })
+        tmp[f"Fora da meta {label_mes}"] = tmp["VISTORIADOR"].isin(bad_m)
 
-            # Qualidade agrupada
-            if dq_m.empty:
-                qual_m = pd.DataFrame(columns=["VISTORIADOR", "erros", "erros_gg"])
-            else:
-                qual_m = (
-                    dq_m.groupby("VISTORIADOR", dropna=False)
-                        .agg(
-                            erros=("ERRO", "size"),
-                            erros_gg=("GRAVIDADE", lambda s: s.isin(grav_gg).sum())
-                        )
-                        .reset_index()
-                )
+        hist_df = hist_df.merge(tmp, on="VISTORIADOR", how="left")
 
-            # Junta produção + qualidade
-            base_m = prod_m.merge(qual_m, on="VISTORIADOR", how="outer").fillna(0)
+    # força o mês atual a refletir exatamente a lista atual (fail_names)
+    col_flag_cur = f"Fora da meta {labels_legenda[-1]}"
+    if col_flag_cur in hist_df.columns:
+        hist_df[col_flag_cur] = hist_df["VISTORIADOR"].astype(str).isin([str(v) for v in fail_names])
 
-            # Calcula %ERRO e %ERRO_GG usando o mesmo denominador (bruta ou líquida)
-            den_hist = base_m["liq"] if denom_mode.startswith("Líquida") else base_m["vist"]
-            den_hist = den_hist.replace({0: np.nan})
+    # contagem de meses fora da meta na janela
+    flag_cols = [c for c in hist_df.columns if c.startswith("Fora da meta ")]
+    hist_df[flag_cols] = hist_df[flag_cols].fillna(False)
+    hist_df["Meses fora da meta"] = hist_df[flag_cols].sum(axis=1)
 
-            base_m["%ERRO"] = ((base_m["erros"]    / den_hist) * 100).round(1)
-            base_m["%ERRO_GG"] = ((base_m["erros_gg"] / den_hist) * 100).round(1)
+    def _situacao_meta(x):
+        if x >= 3:
+            return "3 meses fora da meta"
+        if x == 2:
+            return "2 meses fora da meta"
+        if x == 1:
+            return "Entrou agora"
+        return "Dentro da meta"
 
-            # Ranking do mês para saber quem foi bottom 5 naquele mês (por %ERRO total)
-            rank_m = base_m.copy()
-            rank_m = rank_m[den_hist > 0].replace({np.inf: np.nan}).dropna(subset=["%ERRO"])
-            rank_m = rank_m.sort_values("%ERRO", ascending=False)
-            bottom_m = rank_m["VISTORIADOR"].astype(str).head(5).tolist()
+    hist_df["Situação"] = hist_df["Meses fora da meta"].map(_situacao_meta)
 
-            # Foca só nos bottom atuais (bottom_names)
-            tmp = base_m[["VISTORIADOR", "%ERRO", "%ERRO_GG"]].copy()
-            tmp["VISTORIADOR"] = tmp["VISTORIADOR"].astype(str)
-            tmp = tmp[tmp["VISTORIADOR"].isin(bottom_names)]
-
-            tmp = tmp.rename(columns={
-                "%ERRO":    f"%Erro {label_mes}",
-                "%ERRO_GG": f"%Erro GG {label_mes}",
-            })
-            tmp[f"Bottom {label_mes}"] = tmp["VISTORIADOR"].isin(bottom_m)
-
-            hist_df = hist_df.merge(tmp, on="VISTORIADOR", how="left")
-
-        # --- GARANTIR QUE O MÊS ATUAL USE EXATAMENTE O TOP 5 DO PAINEL ---
-        if labels_legenda:
-            col_bottom_cur = f"Bottom {labels_legenda[-1]}"
-            if col_bottom_cur in hist_df.columns:
-                nomes_bottom_atual = [str(v) for v in bottom_names]
-                hist_df[col_bottom_cur] = hist_df["VISTORIADOR"].astype(str).isin(nomes_bottom_atual)
-
-        # Calcula quantos meses cada um apareceu no bottom
-        bottom_cols = [c for c in hist_df.columns if c.startswith("Bottom ")]
-        if bottom_cols:
-            hist_df[bottom_cols] = hist_df[bottom_cols].fillna(False)
-            hist_df["Meses no bottom"] = hist_df[bottom_cols].sum(axis=1)
-
-            def _icone_reinc(x):
-                if x >= 3:
-                    return "🔥 3 meses no bottom"
-                if x == 2:
-                    return "⚠️ 2 meses no bottom"
-                if x == 1:
-                    return "🆕 Entrou agora"
-                return "✅ Saiu do bottom"
-
-            hist_df["Situação"] = hist_df["Meses no bottom"].map(_icone_reinc)
-        else:
-            hist_df["Meses no bottom"] = 0
-            hist_df["Situação"] = "—"
-
-        # Formata %Erro e flags de bottom para ficar mais visual
-        for c in hist_df.columns:
-            if c.startswith("%Erro GG "):
-                hist_df[c] = hist_df[c].map(
-                    lambda x: "—" if pd.isna(x) else f"{float(x):.1f}%".replace(".", ",")
-                )
-            elif c.startswith("%Erro "):
-                hist_df[c] = hist_df[c].map(
-                    lambda x: "—" if pd.isna(x) else f"{float(x):.1f}%".replace(".", ",")
-                )
-            if c.startswith("Bottom "):
-                hist_df[c] = hist_df[c].map(lambda v: "🔴" if bool(v) else "—")
-
-        # Ordena pelos mais reincidentes / pior %Erro atual
-        col_pct_atual = f"%Erro {labels_legenda[-1]}"
-        if col_pct_atual in hist_df.columns:
-            order_key = hist_df["Meses no bottom"] * 1000
-            try:
-                num_pct = (
-                    hist_df[col_pct_atual]
-                    .astype(str)
-                    .str.replace("%", "")
-                    .str.replace(",", ".")
-                    .astype(float)
-                )
-                order_key = order_key + num_pct
-            except Exception:
-                pass
-            hist_df = hist_df.iloc[np.argsort(-order_key)].reset_index(drop=True)
-
-        # Colunas na ordem: cidade, nome, situação, reincidência, depois meses
-        cols_show = ["CIDADE", "VISTORIADOR", "Situação", "Meses no bottom"]
-        for label_mes in labels_legenda:
-            pct_col   = f"%Erro {label_mes}"
-            pctgg_col = f"%Erro GG {label_mes}"
-            btm_col   = f"Bottom {label_mes}"
-            if pct_col in hist_df.columns:
-                cols_show.append(pct_col)
-            if pctgg_col in hist_df.columns:
-                cols_show.append(pctgg_col)
-            if btm_col in hist_df.columns:
-                cols_show.append(btm_col)
-
-        out_hist = hist_df[cols_show].copy()
-
-        st.dataframe(
-            out_hist,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        legenda_txt = " · ".join(
-            [f"{lab}: %Erro, %Erro GG e 🔴 se ficou entre os 5 piores no mês" for lab in labels_legenda]
-        )
-        st.caption(
-            "Coluna **Situação** mostra a reincidência dos 5 piores do mês atual nos últimos meses. "
-            + legenda_txt
-        )
-
-        # ---------- EXPORTAR EXCEL COLORIDO ----------
-        if not ok_openpyxl:
-            st.warning("openpyxl não disponível — exportação do histórico desativada.")
-        else:
-            wb2 = Workbook()
-            ws2 = wb2.active
-            ws2.title = "Histórico Bottom 5"
-
-            headers = list(out_hist.columns)
-            ws2.append(headers)
-
-            # índice da coluna Situação (para colorir)
-            idx_sit = headers.index("Situação") + 1
-
-            def _fill_situacao(txt: str) -> PatternFill:
-                txt = str(txt)
-                if "3 meses" in txt:
-                    return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # vermelho claro
-                if "2 meses" in txt:
-                    return PatternFill(start_color="FFE599", end_color="FFE599", fill_type="solid")  # amarelo forte
-                if "Entrou agora" in txt:
-                    return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # amarelo claro
-                if "Saiu do bottom" in txt:
-                    return PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")  # verde claro
-                return PatternFill(fill_type=None)
-
-            red_fill = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
-
-            for i, (_, r) in enumerate(out_hist.iterrows(), start=2):
-                ws2.append([r[col] for col in headers])
-
-                # cor da Situação
-                ws2.cell(row=i, column=idx_sit).fill = _fill_situacao(r.get("Situação", ""))
-
-                # colunas Bottom mm/aaaa → vermelho quando 🔴
-                for j, col in enumerate(headers, start=1):
-                    if col.startswith("Bottom "):
-                        if "🔴" in str(r.get(col, "")):
-                            ws2.cell(row=i, column=j).fill = red_fill
-
-            # larguras básicas
-            widths = {
-                "A": 16,   # CIDADE
-                "B": 28,   # VISTORIADOR
-                "C": 24,   # Situação
-                "D": 16,   # Meses no bottom
-            }
-            for col_letter, w in widths.items():
-                ws2.column_dimensions[col_letter].width = w
-
-            xbuf2 = io.BytesIO()
-            wb2.save(xbuf2)
-            xbuf2.seek(0)
-
-            st.download_button(
-                label="📥 Baixar histórico Bottom 5 (Excel)",
-                data=xbuf2,
-                file_name="historico_bottom5_velox.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    # formata % e flags
+    for c in hist_df.columns:
+        if c.startswith("%Erro GG ") or c.startswith("%Erro "):
+            hist_df[c] = hist_df[c].map(
+                lambda x: "—" if pd.isna(x) else f"{float(x):.1f}%".replace(".", ",")
             )
+        if c.startswith("Fora da meta "):
+            hist_df[c] = hist_df[c].map(lambda v: "🔴" if bool(v) else "—")
+
+    # ordena: mais reincidente + pior %Erro do mês atual (quando possível)
+    col_pct_atual = f"%Erro {labels_legenda[-1]}"
+    order_key = hist_df["Meses fora da meta"] * 1000
+    if col_pct_atual in hist_df.columns:
+        try:
+            num_pct = (
+                hist_df[col_pct_atual].astype(str)
+                .str.replace("%", "", regex=False)
+                .str.replace(",", ".", regex=False)
+                .astype(float)
+            )
+            order_key = order_key + num_pct
+        except Exception:
+            pass
+    hist_df = hist_df.iloc[np.argsort(-order_key)].reset_index(drop=True)
+
+    # colunas
+    cols_show = ["CIDADE", "VISTORIADOR", "Situação", "Meses fora da meta"]
+    for lab in labels_legenda:
+        pct_col   = f"%Erro {lab}"
+        pctgg_col = f"%Erro GG {lab}"
+        flag_col  = f"Fora da meta {lab}"
+        if pct_col in hist_df.columns:   cols_show.append(pct_col)
+        if pctgg_col in hist_df.columns: cols_show.append(pctgg_col)
+        if flag_col in hist_df.columns:  cols_show.append(flag_col)
+
+    out_hist = hist_df[cols_show].copy()
+
+    st.dataframe(out_hist, use_container_width=True, hide_index=True)
+
+    legenda_txt = " · ".join(
+        [f"{lab}: %Erro, %Erro GG e 🔴 se ficou fora da meta no mês" for lab in labels_legenda]
+    )
+    st.caption(
+        "A tabela lista todos os colaboradores que não bateram a meta no mês selecionado e mostra o histórico nos últimos 3 meses. "
+        + legenda_txt
+    )
+
+    # ---------- EXPORTAR EXCEL ----------
+    if not ok_openpyxl:
+        st.warning("openpyxl não disponível — exportação do histórico desativada.")
+    else:
+        wb2 = Workbook()
+        ws2 = wb2.active
+        ws2.title = "Histórico Fora da Meta"
+
+        headers = list(out_hist.columns)
+        ws2.append(headers)
+
+        # índice da coluna Situação (para colorir)
+        idx_sit = headers.index("Situação") + 1
+
+        def _fill_situacao_meta(txt: str) -> PatternFill:
+            txt = str(txt)
+            if "3 meses" in txt:
+                return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")  # vermelho claro
+            if "2 meses" in txt:
+                return PatternFill(start_color="FFE599", end_color="FFE599", fill_type="solid")  # amarelo forte
+            if "Entrou agora" in txt:
+                return PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")  # amarelo claro
+            if "Dentro da meta" in txt:
+                return PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")  # verde claro
+            return PatternFill(fill_type=None)
+
+        red_fill = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
+
+        for i, (_, r) in enumerate(out_hist.iterrows(), start=2):
+            ws2.append([r[col] for col in headers])
+
+            # cor da Situação
+            ws2.cell(row=i, column=idx_sit).fill = _fill_situacao_meta(r.get("Situação", ""))
+
+            # colunas "Fora da meta mm/aaaa" → vermelho quando 🔴
+            for j, col in enumerate(headers, start=1):
+                if col.startswith("Fora da meta "):
+                    if "🔴" in str(r.get(col, "")):
+                        ws2.cell(row=i, column=j).fill = red_fill
+
+        # larguras básicas
+        widths = {
+            "A": 16,   # CIDADE
+            "B": 28,   # VISTORIADOR
+            "C": 22,   # Situação
+            "D": 18,   # Meses fora da meta
+        }
+        for col_letter, w in widths.items():
+            ws2.column_dimensions[col_letter].width = w
+
+        xbuf2 = io.BytesIO()
+        wb2.save(xbuf2)
+        xbuf2.seek(0)
+
+        st.download_button(
+            label="📥 Baixar histórico (Excel)",
+            data=xbuf2,
+            file_name="historico_fora_da_meta_velox.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
