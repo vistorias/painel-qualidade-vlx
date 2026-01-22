@@ -1231,6 +1231,30 @@ qual = (
 base = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
 
 # >>> NOVO: coluna CIDADE (vem do city_map que já existe no seu código)
+city_map = {}
+
+try:
+    base_city = pd.DataFrame()
+
+    if ("UNIDADE" in viewP.columns) and ("VISTORIADOR" in viewP.columns) and (not viewP.empty):
+        base_city = viewP[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in dfP.columns) and ("VISTORIADOR" in dfP.columns) and (not dfP.empty):
+        base_city = dfP[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in viewQ.columns) and ("VISTORIADOR" in viewQ.columns):
+        base_city = viewQ[["VISTORIADOR", "UNIDADE"]].copy()
+    elif ("UNIDADE" in dfQ.columns) and ("VISTORIADOR" in dfQ.columns):
+        base_city = dfQ[["VISTORIADOR", "UNIDADE"]].copy()
+
+    if not base_city.empty:
+        base_city["VISTORIADOR"] = base_city["VISTORIADOR"].astype(str).map(_upper)
+        base_city["UNIDADE"] = base_city["UNIDADE"].astype(str).map(_upper)
+        base_city = base_city.drop_duplicates(subset=["VISTORIADOR"])
+        city_map = dict(zip(base_city["VISTORIADOR"], base_city["UNIDADE"]))
+    else:
+        city_map = {}
+except Exception:
+    city_map = {}
+
 base["CIDADE"] = base["VISTORIADOR"].astype(str).map(city_map).fillna("")
 
 den = base["liq"] if denom_mode.startswith("Líquida") else base["vist"]
@@ -1279,20 +1303,18 @@ else:
     ws = wb.active
     ws.title = "Erros por Vistoriador"
 
-    # Cabeçalho
     headers = ["CIDADE","VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
-ws.append(headers)
+    ws.append(headers)
 
-for _, r in fmt_sorted.iterrows():
-    ws.append([
-        r.get("CIDADE",""),
-        r["VISTORIADOR"],
-        int(r["vist"]), int(r["rev"]), int(r["liq"]),
-        int(r["erros"]), int(r["erros_gg"]),
-        r["%ERRO"], r["%ERRO_GG"]
-    ])
+    for _, r in fmt_sorted.iterrows():
+        ws.append([
+            r.get("CIDADE",""),
+            r["VISTORIADOR"],
+            int(r["vist"]), int(r["rev"]), int(r["liq"]),
+            int(r["erros"]), int(r["erros_gg"]),
+            r["%ERRO"], r["%ERRO_GG"]
+        ])
 
-    # Função para pintar células conforme o farol
     def _fill_from_farol(emoji: str) -> PatternFill:
         if isinstance(emoji, str) and "🟢" in emoji:
             return PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
@@ -1302,14 +1324,13 @@ for _, r in fmt_sorted.iterrows():
             return PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         return PatternFill(fill_type=None)
 
-    # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
-    ws[f"H{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO"))
-    ws[f"I{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
-    ws[f"H{i}"].alignment = Alignment(horizontal="center")
-    ws[f"I{i}"].alignment = Alignment(horizontal="center")
+        ws[f"H{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO"))
+        ws[f"I{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
+        ws[f"H{i}"].alignment = Alignment(horizontal="center")
+        ws[f"I{i}"].alignment = Alignment(horizontal="center")
 
-widths = {"A":16, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":12, "I":12}
+    widths = {"A":16, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":12, "I":12}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
@@ -1323,7 +1344,7 @@ widths = {"A":16, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":12, "I":12
         file_name="erros_por_vistoriador.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
+    
 # ------------------ LEGENDA ------------------
 with st.expander("Legenda do farol", expanded=False):
     st.write(f"🟢 Dentro da meta · %ERRO ≤ {META_ERRO:.1f}% · %ERRO_GG ≤ {META_ERRO_GG:.1f}%")
@@ -1860,4 +1881,5 @@ else:
         "A tabela mostra todos os colaboradores que ficaram fora da meta no mês selecionado "
         "e o histórico completo de desempenho mês a mês."
     )
+
 
