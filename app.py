@@ -1229,6 +1229,10 @@ qual = (
 
 # ------------------ BASE FINAL ------------------
 base = prod.merge(qual, on="VISTORIADOR", how="outer").fillna(0)
+
+# >>> NOVO: coluna CIDADE (vem do city_map que já existe no seu código)
+base["CIDADE"] = base["VISTORIADOR"].astype(str).map(city_map).fillna("")
+
 den = base["liq"] if denom_mode.startswith("Líquida") else base["vist"]
 den = den.replace({0: np.nan})
 
@@ -1253,7 +1257,7 @@ fmt["%ERRO_GG"] = fmt.apply(lambda r: _fmt_val_pct(r["%ERRO_GG"], r["FAROL_%ERRO
 # Ordenação decrescente pelo valor numérico real (%ERRO)
 fmt_sorted = fmt.sort_values(by="%ERRO", key=lambda col: base.loc[col.index, "%ERRO"], ascending=False)
 
-cols_view = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+cols_view = ["CIDADE","VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
 
 st.dataframe(
     fmt_sorted[cols_view],
@@ -1276,17 +1280,17 @@ else:
     ws.title = "Erros por Vistoriador"
 
     # Cabeçalho
-    headers = ["VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
-    ws.append(headers)
+    headers = ["CIDADE","VISTORIADOR","vist","rev","liq","erros","erros_gg","%ERRO","%ERRO_GG"]
+ws.append(headers)
 
-    # Linhas (usamos o DataFrame já ordenado e com farol calculado)
-    for _, r in fmt_sorted.iterrows():
-        ws.append([
-            r["VISTORIADOR"],
-            int(r["vist"]), int(r["rev"]), int(r["liq"]),
-            int(r["erros"]), int(r["erros_gg"]),
-            r["%ERRO"], r["%ERRO_GG"]
-        ])
+for _, r in fmt_sorted.iterrows():
+    ws.append([
+        r.get("CIDADE",""),
+        r["VISTORIADOR"],
+        int(r["vist"]), int(r["rev"]), int(r["liq"]),
+        int(r["erros"]), int(r["erros_gg"]),
+        r["%ERRO"], r["%ERRO_GG"]
+    ])
 
     # Função para pintar células conforme o farol
     def _fill_from_farol(emoji: str) -> PatternFill:
@@ -1300,13 +1304,12 @@ else:
 
     # Aplicar cores nas colunas %ERRO (G) e %ERRO_GG (H)
     for i, (_, r) in enumerate(fmt_sorted.iterrows(), start=2):
-        ws[f"G{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO"))
-        ws[f"H{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
+    ws[f"H{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO"))
+    ws[f"I{i}"].fill = _fill_from_farol(r.get("FAROL_%ERRO_GG"))
+    ws[f"H{i}"].alignment = Alignment(horizontal="center")
+    ws[f"I{i}"].alignment = Alignment(horizontal="center")
 
-        ws[f"G{i}"].alignment = Alignment(horizontal="center")
-        ws[f"H{i}"].alignment = Alignment(horizontal="center")
-
-    widths = {"A":28, "B":10, "C":10, "D":10, "E":10, "F":10, "G":12, "H":12}
+widths = {"A":16, "B":28, "C":10, "D":10, "E":10, "F":10, "G":10, "H":12, "I":12}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
@@ -1857,3 +1860,4 @@ else:
         "A tabela mostra todos os colaboradores que ficaram fora da meta no mês selecionado "
         "e o histórico completo de desempenho mês a mês."
     )
+
