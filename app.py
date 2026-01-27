@@ -1765,10 +1765,21 @@ def _build_month_base(dq_m, dp_m):
                 .reset_index()
         )
 
+    # garante coluna e normaliza vistoriador
+    for df_ in (prod_m, qual_m):
+        if "VISTORIADOR" in df_.columns:
+            df_["VISTORIADOR"] = df_["VISTORIADOR"].astype(str).map(_upper)
+
     base_m = prod_m.merge(qual_m, on="VISTORIADOR", how="outer").fillna(0)
 
-    den = base_m["liq"] if denom_mode.startswith("Líquida") else base_m["vist"]
-    den = den.replace({0: np.nan})
+    # FIX: força numérico (evita dtype object no round)
+    for c in ["vist", "rev", "liq", "erros", "erros_gg"]:
+        if c not in base_m.columns:
+            base_m[c] = 0
+        base_m[c] = pd.to_numeric(base_m[c], errors="coerce").fillna(0).astype(float)
+
+    den_col = "liq" if denom_mode.startswith("Líquida") else "vist"
+    den = pd.to_numeric(base_m[den_col], errors="coerce").astype(float).replace({0: np.nan})
 
     base_m["%ERRO"] = ((base_m["erros"] / den) * 100).round(1)
     base_m["%ERRO_GG"] = ((base_m["erros_gg"] / den) * 100).round(1)
@@ -1881,5 +1892,6 @@ else:
         "A tabela mostra todos os colaboradores que ficaram fora da meta no mês selecionado "
         "e o histórico completo de desempenho mês a mês."
     )
+
 
 
